@@ -5,9 +5,10 @@ FROM python:3.9-slim
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
+    ca-certificates \
     libglib2.0-0 \
     libnss3 \
-    libatk-1.0-0 \
+    libatk1.0-0 \
     libatk-bridge2.0-0 \
     libcups2 \
     libdrm2 \
@@ -16,10 +17,11 @@ RUN apt-get update && apt-get install -y \
     libxdamage1 \
     libxext6 \
     libxfixes3 \
-    librandr2 \
+    libxrandr2 \
     libgbm1 \
     libasound2 \
     libpango-1.0-0 \
+    libpangocairo-1.0-0 \
     libcairo2 \
     && rm -rf /var/lib/apt/lists/*
 
