@@ -1,0 +1,6 @@
+name: SignalScanner
+agent_class: ParallelAgent
+sub_agents:
+  - config_path: ./PricingWatcher.yaml
+  - config_path: ./HiringSignalAgent.yaml
+  - config_path: ./MessagingShiftAgent.yaml

@@ -1,0 +1,106 @@
+/* =============================================
+   OAKWELL — Custom styles (Tailwind supplement)
+   Animations, gradients, and custom components
+   ============================================= */
+
+/* Grid Background */
+.grid-bg {
+    background-image:
+        linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+    background-size: 80px 80px;
+    mask-image: radial-gradient(ellipse 60% 60% at 50% 50%, black 20%, transparent 100%);
+    -webkit-mask-image: radial-gradient(ellipse 60% 60% at 50% 50%, black 20%, transparent 100%);
+}
+
+/* Gradient text */
+.gradient-text {
+    background: linear-gradient(135deg, #22c55e 0%, #4ade80 40%, #86efac 60%, #22c55e 100%);
+    background-size: 300% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: gradient-shift 4s ease infinite;
+}
+
+@keyframes gradient-shift {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
+/* Ticker animation */
+.ticker-track {
+    animation: ticker-scroll 60s linear infinite;
+}
+
+@keyframes ticker-scroll {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+}
+
+/* Reveal animation */
+.reveal {
+    opacity: 0;
+    transform: translateY(30px);
+    transition: opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1), transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.reveal.active {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+/* Terminal line animation */
+.terminal-line {
+    opacity: 0;
+    transform: translateX(-6px);
+    animation: line-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    white-space: nowrap;
+}
+
+@keyframes line-in {
+    to { opacity: 1; transform: translateX(0); }
+}
+
+/* Scan line animation for audit display */
+.scan-line {
+    animation: scan 3s ease-in-out infinite;
+}
+
+@keyframes scan {
+    0% { top: -2px; opacity: 0; }
+    10% { opacity: 1; }
+    90% { opacity: 1; }
+    100% { top: 100%; opacity: 0; }
+}
+
+/* Button shine effect */
+.btn-primary::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, transparent 40%, rgba(255,255,255,0.15) 50%, transparent 60%);
+    background-size: 250% 100%;
+    animation: btn-shine 3s ease infinite;
+}
+
+@keyframes btn-shine {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 10px; }
+html { scrollbar-width: thin; scrollbar-color: #3f3f46 transparent; }
+
+/* Selection */
+::selection { background: rgba(34,197,94,0.2); color: #fff; }
+
+/* Perception layer pulse */
+@keyframes node-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.2); }
+    50% { box-shadow: 0 0 0 8px rgba(34,197,94,0); }
+}

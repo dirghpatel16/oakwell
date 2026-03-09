@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oakwell — Autonomous Revenue Defense System</title>
+    <meta name="description"
+        content="Eliminate information asymmetry. Oakwell is the autonomous revenue defense system that verifies competitor claims with Vision AI and generates adversarial strategic guardrails.">
+    <meta name="theme-color" content="#030712">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300..900&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] },
+                    colors: {
+                        oak: { 950: '#030712', 900: '#070b14', 850: '#0a0f1a', 800: '#0d1320', 700: '#141c2e', 600: '#1e293b' },
+                        signal: { green: '#22c55e', red: '#ef4444', amber: '#f59e0b', blue: '#3b82f6', cyan: '#06b6d4', purple: '#a855f7' }
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body class="bg-oak-950 text-gray-100 font-sans antialiased overflow-x-hidden">
+
+    <!-- CURSOR GLOW -->
+    <div id="cursorGlow"
+        class="fixed w-[600px] h-[600px] rounded-full pointer-events-none z-0 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-300"
+        style="background:radial-gradient(circle,rgba(34,197,94,0.04) 0%,transparent 70%)"></div>
+
+    <!-- GRID BG -->
+    <div class="fixed inset-0 pointer-events-none z-0 grid-bg"></div>
+
+    <!-- ══════════════════════════════════════
+         THE TICKER — Revenue Signal Bar
+         ══════════════════════════════════════ -->
+    <div id="ticker"
+        class="fixed top-0 left-0 right-0 z-[1001] h-8 bg-oak-900/95 border-b border-white/5 flex items-center overflow-hidden backdrop-blur-md">
+        <div class="ticker-track flex items-center gap-8 whitespace-nowrap font-mono text-[11px] tracking-wide">
+            <span class="flex items-center gap-2"><span
+                    class="w-1.5 h-1.5 rounded-full bg-signal-green animate-pulse"></span><span
+                    class="text-signal-green">LIVE</span><span class="text-gray-500">REVENUE SIGNAL FEED</span></span>
+            <span class="text-gray-600">│</span>
+            <span class="text-gray-400">HubSpot: <span class="text-signal-amber">5-seat minimum verified</span> <span
+                    class="text-gray-600">· 2m ago</span></span>
+            <span class="text-gray-600">│</span>
+            <span class="text-gray-400">Salesforce: <span class="text-signal-red">API limit discrepancy detected</span>
+                <span class="text-gray-600">· 4m ago</span></span>
+            <span class="text-gray-600">│</span>
+            <span class="text-gray-400">Gong: <span class="text-signal-green">pricing page unchanged</span> <span
+                    class="text-gray-600">· 7m ago</span></span>
+            <span class="text-gray-600">│</span>
+            <span class="text-gray-400">ZoomInfo: <span class="text-signal-red">enterprise tier removed from public
+                    view</span> <span class="text-gray-600">· 11m ago</span></span>
+            <span class="text-gray-600">│</span>
+            <span class="text-gray-400">Outreach: <span class="text-signal-amber">new contract minimum detected —
+                    $36K/yr</span> <span class="text-gray-600">· 14m ago</span></span>
+            <span class="text-gray-600">│</span>
+            <span class="text-gray-400">Clari: <span class="text-signal-red">SSO removed from Growth plan</span> <span
+                    class="text-gray-600">· 18m ago</span></span>
+            <span class="text-gray-600">│</span>
+            <span class="text-gray-400">Apollo: <span class="text-signal-green">credit rollover claim verified</span>
+                <span class="text-gray-600">· 22m ago</span></span>
+            <span class="text-gray-600">│</span>
+            <span class="text-gray-400">Drift: <span class="text-signal-amber">seat-based pricing shift detected</span>
+                <span class="text-gray-600">· 26m ago</span></span>
+            <!-- duplicate for seamless loop -->
+            <span class="text-gray-600">│</span>
+            <span class="flex items-center gap-2"><span
+                    class="w-1.5 h-1.5 rounded-full bg-signal-green animate-pulse"></span><span
+                    class="text-signal-green">LIVE</span><span class="text-gray-500">REVENUE SIGNAL FEED</span></span>
+            <span class="text-gray-600">│</span>
+            <span class="text-gray-400">HubSpot: <span class="text-signal-amber">5-seat minimum verified</span> <span
+                    class="text-gray-600">· 2m ago</span></span>
+            <span class="text-gray-600">│</span>
+            <span class="text-gray-400">Salesforce: <span class="text-signal-red">API limit discrepancy detected</span>
+                <span class="text-gray-600">· 4m ago</span></span>
+            <span class="text-gray-600">│</span>
+            <span class="text-gray-400">Gong: <span class="text-signal-green">pricing page unchanged</span> <span
+                    class="text-gray-600">· 7m ago</span></span>
+            <span class="text-gray-600">│</span>
+            <span class="text-gray-400">ZoomInfo: <span class="text-signal-red">enterprise tier removed from public
+                    view</span> <span class="text-gray-600">· 11m ago</span></span>
+            <span class="text-gray-600">│</span>
+            <span class="text-gray-400">Outreach: <span class="text-signal-amber">new contract minimum detected —
+                    $36K/yr</span> <span class="text-gray-600">· 14m ago</span></span>
+            <span class="text-gray-600">│</span>
+            <span class="text-gray-400">Clari: <span class="text-signal-red">SSO removed from Growth plan</span> <span
+                    class="text-gray-600">· 18m ago</span></span>
+            <span class="text-gray-600">│</span>
+            <span class="text-gray-400">Apollo: <span class="text-signal-green">credit rollover claim verified</span>
+                <span class="text-gray-600">· 22m ago</span></span>
+            <span class="text-gray-600">│</span>
+            <span class="text-gray-400">Drift: <span class="text-signal-amber">seat-based pricing shift detected</span>
+                <span class="text-gray-600">· 26m ago</span></span>
+        </div>
+    </div>
+
+    <!-- ══════════════════════════════════════
+         NAVIGATION
+         ══════════════════════════════════════ -->
+    <nav id="nav"
+        class="fixed top-8 left-0 right-0 z-[1000] h-16 flex items-center justify-between px-8 bg-oak-950/60 backdrop-blur-xl border-b border-white/[0.04] transition-all duration-300">
+        <a href="#" class="flex items-center gap-2.5">
+            <div
+                class="w-8 h-8 rounded-lg bg-signal-green/10 border border-signal-green/20 flex items-center justify-center text-signal-green">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 2L2 7V17L12 22L22 17V7L12 2Z" stroke="currentColor" stroke-width="1.5"
+                        stroke-linejoin="round" />
+                    <path d="M12 22V12" stroke="currentColor" stroke-width="1.5" />
+                    <path d="M22 7L12 12L2 7" stroke="currentColor" stroke-width="1.5" />
+                    <circle cx="12" cy="12" r="2" fill="currentColor" />
+                </svg>
+            </div>
+            <span class="text-base font-bold tracking-tight">Oakwell</span>
+        </a>
+        <div class="hidden md:flex gap-8">
+            <a href="#perception"
+                class="text-[13px] font-medium text-gray-500 hover:text-gray-300 transition-colors">Perception Layer</a>
+            <a href="#audit" class="text-[13px] font-medium text-gray-500 hover:text-gray-300 transition-colors">Audit
+                Display</a>
+            <a href="#sentinel"
+                class="text-[13px] font-medium text-gray-500 hover:text-gray-300 transition-colors">Sentinel</a>
+            <a href="#architecture"
+                class="text-[13px] font-medium text-gray-500 hover:text-gray-300 transition-colors">Architecture</a>
+        </div>
+        <div class="flex items-center gap-5">
+            <a href="mailto:team@oakwell.ai"
+                class="text-[13px] text-gray-500 hover:text-gray-300 transition-colors hidden md:block">Contact</a>
+            <button onclick="document.getElementById('cta').scrollIntoView({behavior:'smooth'})"
+                class="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-semibold text-black bg-signal-green rounded-lg hover:bg-green-600 transition-all hover:-translate-y-px hover:shadow-[0_4px_16px_rgba(34,197,94,0.3)]">
+                Request Access <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2">
+                    <path d="M5 12h14M12 5l7 7-7 7" />
+                </svg>
+            </button>
+        </div>
+    </nav>
+
+    <!-- ══════════════════════════════════════
+         HERO
+         ══════════════════════════════════════ -->
+    <section class="min-h-screen flex flex-col items-center pt-40 pb-20 px-6 relative overflow-hidden">
+        <div class="absolute -top-52 left-1/2 -translate-x-1/2 w-[1200px] h-[1200px] pointer-events-none"
+            style="background:radial-gradient(circle,rgba(34,197,94,0.08) 0%,rgba(6,182,212,0.03) 40%,transparent 70%)">
+        </div>
+        <div class="absolute top-0 right-0 w-[600px] h-[600px] pointer-events-none opacity-30"
+            style="background:radial-gradient(circle at 80% 20%,rgba(34,197,94,0.15) 0%,transparent 50%)"></div>
+        <div class="relative z-10 text-center max-w-[880px]">
+            <div
+                class="reveal inline-flex items-center gap-2.5 px-5 py-2 text-[13px] font-semibold text-signal-green bg-signal-green/[0.06] border border-signal-green/15 rounded-full mb-10">
+                <span class="w-1.5 h-1.5 rounded-full bg-signal-green animate-pulse"></span>
+                Autonomous Revenue Defense — Online
+            </div>
+            <h1 class="reveal text-[clamp(42px,7vw,74px)] font-extrabold tracking-[-0.045em] leading-[1.05] mb-7">
+                <span class="block">Eliminate</span>
+                <span class="block">Information Asymmetry.</span>
+                <span class="block"><em class="not-italic gradient-text">Defend Every Dollar.</em></span>
+            </h1>
+            <p class="reveal text-[clamp(16px,2vw,19px)] text-gray-400 leading-relaxed max-w-xl mx-auto mb-11">
+                Built on the Google ADK & Gemini 3.1 Stack. Oakwell is the Source of Truth for the modern Sales War Room
+                — a Hierarchical Adversarial Architecture that captures, verifies, and disproves competitor claims, then
+                auto-generates Autonomous Strategic Guardrails that win deals.
+            </p>
+            <div class="reveal flex items-center justify-center gap-4 mb-12">
+                <button onclick="document.getElementById('cta').scrollIntoView({behavior:'smooth'})"
+                    class="btn-primary inline-flex items-center gap-2 px-7 py-3.5 text-[15px] font-semibold text-black bg-signal-green rounded-xl hover:bg-green-600 transition-all hover:-translate-y-0.5 hover:shadow-[0_8px_30px_rgba(34,197,94,0.35)] relative overflow-hidden">
+                    Start Defending Revenue <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2.5">
+                        <path d="M5 12h14M12 5l7 7-7 7" />
+                    </svg>
+                </button>
+                <button onclick="document.getElementById('perception').scrollIntoView({behavior:'smooth'})"
+                    class="px-7 py-3.5 text-[15px] font-medium text-gray-400 border border-white/[0.06] rounded-xl hover:text-white hover:border-white/10 hover:bg-white/[0.02] transition-all">
+                    View the Perception Layer
+                </button>
+            </div>
+            <div class="reveal flex items-center justify-center gap-3 text-[13px] text-gray-500">
+                <div class="flex -space-x-2">
+                    <div
+                        class="w-7 h-7 rounded-full bg-oak-800 border-2 border-oak-950 flex items-center justify-center text-[11px] font-semibold text-gray-400">
+                        D</div>
+                    <div
+                        class="w-7 h-7 rounded-full bg-oak-800 border-2 border-oak-950 flex items-center justify-center text-[11px] font-semibold text-gray-400">
+                        A</div>
+                    <div
+                        class="w-7 h-7 rounded-full bg-oak-800 border-2 border-oak-950 flex items-center justify-center text-[11px] font-semibold text-gray-400">
+                        R</div>
+                </div>
+                <span>Built on Google ADK. Powered by Gemini 3.1.</span>
+            </div>
+        </div>
+
+        <!-- Hero Dashboard Image -->
+        <div class="reveal relative z-10 w-full max-w-[1000px] mt-16">
+            <div
+                class="relative rounded-3xl overflow-hidden border border-white/[0.08] shadow-[0_25px_80px_rgba(0,0,0,0.6),0_0_60px_rgba(34,197,94,0.08)] group">
+                <div
+                    class="absolute inset-0 bg-gradient-to-t from-oak-950 via-transparent to-transparent z-10 pointer-events-none">
+                </div>
+                <div class="absolute inset-0 border border-signal-green/[0.06] rounded-3xl z-20 pointer-events-none">
+                </div>
+                <img src="hero_dashboard.png" alt="Oakwell Command Center — Autonomous Revenue Defense Dashboard"
+                    class="w-full h-auto block transition-transform duration-700 group-hover:scale-[1.02]">
+                <!-- Floating terminal overlay -->
+                <div class="absolute bottom-0 left-0 right-0 z-20 p-6">
+                    <div
+                        class="bg-oak-950/90 backdrop-blur-xl border border-white/[0.08] rounded-2xl overflow-hidden shadow-[0_8px_32px_rgba(0,0,0,0.4)] max-w-[700px] mx-auto">
+                        <div
+                            class="flex items-center justify-between px-5 py-3 bg-white/[0.02] border-b border-white/[0.06]">
+                            <div class="flex gap-[7px]"><span class="w-2.5 h-2.5 rounded-full bg-[#ff5f57]"></span><span
+                                    class="w-2.5 h-2.5 rounded-full bg-[#febc2e]"></span><span
+                                    class="w-2.5 h-2.5 rounded-full bg-[#28c840]"></span></div>
+                            <div class="font-mono text-[11px] text-gray-500 font-medium">oakwell — war room</div>
+                            <div class="flex gap-[7px] invisible"><span class="w-2.5 h-2.5 rounded-full"></span><span
+                                    class="w-2.5 h-2.5 rounded-full"></span><span
+                                    class="w-2.5 h-2.5 rounded-full"></span></div>
+                        </div>
+                        <div id="terminal"
+                            class="px-5 py-4 font-mono text-[11.5px] leading-[1.85] text-gray-500 min-h-[200px] max-h-[240px] overflow-hidden">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ══════════════════════════════════════
+         PROOF BAR
+         ══════════════════════════════════════ -->
+    <div class="border-y border-white/[0.06] py-14 px-6 relative z-10">
+        <div class="max-w-[1100px] mx-auto flex items-center justify-center gap-12 flex-wrap">
+            <div class="reveal text-center"><span class="block text-4xl font-extrabold tracking-tight"
+                    data-target="10">0</span><span class="text-[13px] text-gray-500 font-medium">Autonomous
+                    Agents</span></div>
+            <div class="w-px h-10 bg-white/[0.06] hidden md:block"></div>
+            <div class="reveal text-center"><span class="block text-4xl font-extrabold tracking-tight">&lt;10<span
+                        class="text-xl font-medium text-gray-400">s</span></span><span
+                    class="text-[13px] text-gray-500 font-medium">Time-to-Truth</span></div>
+            <div class="w-px h-10 bg-white/[0.06] hidden md:block"></div>
+            <div class="reveal text-center"><span class="block text-4xl font-extrabold tracking-tight"
+                    data-target="15">0</span><span class="text-[13px] text-gray-500 font-medium">Data Sources</span>
+            </div>
+            <div class="w-px h-10 bg-white/[0.06] hidden md:block"></div>
+            <div class="reveal text-center"><span class="block text-4xl font-extrabold tracking-tight">4<span
+                        class="text-xl font-medium text-gray-400">hrs</span> → 10<span
+                        class="text-xl font-medium text-gray-400">s</span></span><span
+                    class="text-[13px] text-gray-500 font-medium">Research Compression</span></div>
+            <div class="w-px h-10 bg-white/[0.06] hidden md:block"></div>
+            <div class="reveal text-center"><span class="block text-4xl font-extrabold tracking-tight">24/7</span><span
+                    class="text-[13px] text-gray-500 font-medium">Sentinel Watch</span></div>
+        </div>
+    </div>
+
+    <!-- ══════════════════════════════════════
+         THE PERCEPTION LAYER
+         ══════════════════════════════════════ -->
+    <section id="perception" class="py-36 px-6 relative z-10">
+        <div class="max-w-[1200px] mx-auto">
+            <p class="reveal text-[13px] font-semibold text-signal-green uppercase tracking-widest mb-5">The Perception
+                Layer</p>
+            <h2 class="reveal text-[clamp(28px,4.5vw,44px)] font-extrabold tracking-tight leading-[1.1] mb-5">
+                Hierarchical Adversarial Architecture</h2>
+            <p class="reveal text-[17px] text-gray-400 leading-relaxed max-w-xl mb-8">Built on the Google ADK & Gemini
+                3.1 Stack. Four autonomous stages transform raw competitive noise into Verified Revenue Events —
+                reducing Time-to-Truth from 4 hours of manual research to &lt;10 seconds of Agentic reasoning.</p>
+
+            <!-- Neural Network Visual -->
+            <div class="reveal mb-16 rounded-3xl overflow-hidden border border-white/[0.06] relative">
+                <div
+                    class="absolute inset-0 bg-gradient-to-r from-oak-950 via-transparent to-oak-950 z-10 pointer-events-none">
+                </div>
+                <img src="perception_bg.png" alt="Neural network - Hierarchical Adversarial Architecture visualization"
+                    class="w-full h-48 md:h-64 object-cover opacity-60">
+            </div>
+
+            <!-- Pipeline Flow -->
+            <div class="reveal grid grid-cols-1 md:grid-cols-4 gap-0 items-stretch relative">
+                <!-- Connector lines (desktop) -->
+                <div
+                    class="hidden md:block absolute top-1/2 left-0 right-0 h-px bg-gradient-to-r from-signal-green/0 via-signal-green/30 to-signal-green/0 -translate-y-1/2 z-0">
+                </div>
+
+                <!-- Node 1: Call Ingestion -->
+                <div class="relative z-10 flex flex-col items-center text-center group">
+                    <div
+                        class="w-20 h-20 rounded-2xl bg-signal-green/[0.08] border border-signal-green/20 flex items-center justify-center mb-5 group-hover:bg-signal-green/15 group-hover:border-signal-green/30 group-hover:shadow-[0_0_30px_rgba(34,197,94,0.15)] transition-all duration-500">
+                        <svg class="w-8 h-8 text-signal-green" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                            stroke-width="1.5">
+                            <path
+                                d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                        </svg>
+                    </div>
+                    <div class="font-mono text-[10px] text-signal-green/60 tracking-widest uppercase mb-2">Stage 01 ·
+                        Perception Swarm</div>
+                    <h3 class="text-base font-bold tracking-tight mb-2">Call Ingestion</h3>
+                    <p class="text-[13px] text-gray-500 leading-relaxed max-w-[220px]">Powered by <span
+                            class="text-signal-green">Gemini 2.5 Flash</span>. Sub-second parallel processing of
+                        transcripts across 15+ external sources.</p>
+                    <!-- Arrow (desktop) -->
+                    <div class="hidden md:block absolute -right-3 top-1/2 -translate-y-1/2 z-20">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                            <path d="M5 12h14M12 5l7 7-7 7" stroke="#22c55e" stroke-width="1.5" stroke-linecap="round"
+                                stroke-linejoin="round" opacity="0.4" />
+                        </svg>
+                    </div>
+                </div>
+
+                <!-- Node 2: Stealth Scraping -->
+                <div class="relative z-10 flex flex-col items-center text-center group mt-8 md:mt-0">
+                    <div
+                        class="w-20 h-20 rounded-2xl bg-signal-cyan/[0.08] border border-signal-cyan/20 flex items-center justify-center mb-5 group-hover:bg-signal-cyan/15 group-hover:border-signal-cyan/30 group-hover:shadow-[0_0_30px_rgba(6,182,212,0.15)] transition-all duration-500">
+                        <svg class="w-8 h-8 text-signal-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                            stroke-width="1.5">
+                            <path
+                                d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9" />
+                        </svg>
+                    </div>
+                    <div class="font-mono text-[10px] text-signal-cyan/60 tracking-widest uppercase mb-2">Stage 02 ·
+                        Stealth Layer</div>
+                    <h3 class="text-base font-bold tracking-tight mb-2">Stealth Scraping</h3>
+                    <p class="text-[13px] text-gray-500 leading-relaxed max-w-[220px]">Proprietary browser-engine logic
+                        bypasses enterprise firewalls. Sees authenticated data <span class="text-signal-cyan">Gong and
+                            Apollo cannot reach</span>.</p>
+                    <div class="hidden md:block absolute -right-3 top-1/2 -translate-y-1/2 z-20">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                            <path d="M5 12h14M12 5l7 7-7 7" stroke="#06b6d4" stroke-width="1.5" stroke-linecap="round"
+                                stroke-linejoin="round" opacity="0.4" />
+                        </svg>
+                    </div>
+                </div>
+
+                <!-- Node 3: Multimodal Audit -->
+                <div class="relative z-10 flex flex-col items-center text-center group mt-8 md:mt-0">
+                    <div
+                        class="w-20 h-20 rounded-2xl bg-signal-purple/[0.08] border border-signal-purple/20 flex items-center justify-center mb-5 group-hover:bg-signal-purple/15 group-hover:border-signal-purple/30 group-hover:shadow-[0_0_30px_rgba(168,85,247,0.15)] transition-all duration-500">
+                        <svg class="w-8 h-8 text-signal-purple" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                            stroke-width="1.5">
+                            <path
+                                d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                        </svg>
+                    </div>
+                    <div class="font-mono text-[10px] text-signal-purple/60 tracking-widest uppercase mb-2">Stage 03 ·
+                        The Orchestrator</div>
+                    <h3 class="text-base font-bold tracking-tight mb-2">Multimodal Audit</h3>
+                    <p class="text-[13px] text-gray-500 leading-relaxed max-w-[220px]">Powered by <span
+                            class="text-signal-purple">Gemini 3.1 Pro</span>. ReAct loop double-checks claims.
+                        Visual-text contradiction triggers Strategic Override.</p>
+                    <div class="hidden md:block absolute -right-3 top-1/2 -translate-y-1/2 z-20">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                            <path d="M5 12h14M12 5l7 7-7 7" stroke="#a855f7" stroke-width="1.5" stroke-linecap="round"
+                                stroke-linejoin="round" opacity="0.4" />
+                        </svg>
+                    </div>
+                </div>
+
+                <!-- Node 4: Defensive Strategy -->
+                <div class="relative z-10 flex flex-col items-center text-center group mt-8 md:mt-0">
+                    <div
+                        class="w-20 h-20 rounded-2xl bg-signal-amber/[0.08] border border-signal-amber/20 flex items-center justify-center mb-5 group-hover:bg-signal-amber/15 group-hover:border-signal-amber/30 group-hover:shadow-[0_0_30px_rgba(245,158,11,0.15)] transition-all duration-500">
+                        <svg class="w-8 h-8 text-signal-amber" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                            stroke-width="1.5">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                        </svg>
+                    </div>
+                    <div class="font-mono text-[10px] text-signal-amber/60 tracking-widest uppercase mb-2">Stage 04 ·
+                        Strategic Override</div>
+                    <h3 class="text-base font-bold tracking-tight mb-2">Defensive Strategy</h3>
+                    <p class="text-[13px] text-gray-500 leading-relaxed max-w-[220px]">Bucky autonomously triggers
+                        Strategic Override. War-gamed talk-tracks with kill-shot evidence. <span
+                            class="text-signal-amber">Autonomous Strategic Guardrails</span> deployed.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ══════════════════════════════════════
+         THE AUDIT DISPLAY — Visual Receipts
+         ══════════════════════════════════════ -->
+    <section id="audit" class="py-36 px-6 relative z-10 border-t border-white/[0.04]">
+        <div class="max-w-[1200px] mx-auto">
+            <p class="reveal text-[13px] font-semibold text-signal-green uppercase tracking-widest mb-5">The Audit
+                Display</p>
+            <h2 class="reveal text-[clamp(28px,4.5vw,44px)] font-extrabold tracking-tight leading-[1.1] mb-5">Visual
+                Receipts. Undeniable Proof.</h2>
+            <p class="reveal text-[17px] text-gray-400 leading-relaxed max-w-xl mb-16">Every competitor claim is
+                verified against a real screenshot. AI-drawn bounding boxes highlight pricing traps your buyers can see
+                with their own eyes.</p>
+
+            <div class="reveal grid grid-cols-1 lg:grid-cols-5 gap-6">
+                <!-- Screenshot Panel (large) -->
+                <div
+                    class="lg:col-span-3 bg-oak-800/40 border border-white/[0.06] rounded-2xl overflow-hidden relative group">
+                    <!-- Header bar -->
+                    <div
+                        class="flex items-center justify-between px-5 py-3 bg-white/[0.02] border-b border-white/[0.06]">
+                        <div class="flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-signal-red animate-pulse"></span>
+                            <span class="font-mono text-[11px] text-signal-red font-medium">VISUAL RECEIPT — LIVE
+                                CAPTURE</span>
+                        </div>
+                        <span class="font-mono text-[10px] text-gray-600">2026-03-03T18:34:12Z</span>
+                    </div>
+                    <!-- Simulated screenshot area -->
+                    <div class="relative p-6">
+                        <div
+                            class="bg-oak-900 rounded-xl border border-white/[0.04] p-8 relative overflow-hidden min-h-[360px]">
+                            <!-- Simulated competitor pricing page -->
+                            <div class="mb-6">
+                                <div class="text-gray-600 font-mono text-[10px] mb-3 tracking-widest uppercase">
+                                    competitor-crm.com/pricing</div>
+                                <div class="text-xl font-bold text-gray-300 mb-1">Competitor CRM — Pricing</div>
+                                <div class="text-sm text-gray-500">Choose the plan that fits your team</div>
+                            </div>
+                            <div class="grid grid-cols-3 gap-3">
+                                <!-- Plan 1 -->
+                                <div class="bg-oak-850/80 rounded-lg p-4 border border-white/[0.04]">
+                                    <div class="text-[11px] text-gray-500 font-mono uppercase tracking-wider mb-2">
+                                        Starter</div>
+                                    <div class="text-2xl font-bold text-white mb-1">$30<span
+                                            class="text-sm text-gray-500">/mo</span></div>
+                                    <div class="text-[11px] text-gray-600">per user, billed annually</div>
+                                </div>
+                                <!-- Plan 2 — with bounding box -->
+                                <div class="bg-oak-850/80 rounded-lg p-4 border-2 border-signal-red/60 relative">
+                                    <div
+                                        class="absolute -top-2.5 -right-2 px-2 py-0.5 bg-signal-red text-white text-[9px] font-bold font-mono rounded tracking-wider">
+                                        TRAP DETECTED</div>
+                                    <div class="text-[11px] text-gray-500 font-mono uppercase tracking-wider mb-2">
+                                        Professional</div>
+                                    <div class="text-2xl font-bold text-white mb-1">$75<span
+                                            class="text-sm text-gray-500">/mo</span></div>
+                                    <div class="text-[11px] text-signal-red font-medium">5-seat minimum hidden</div>
+                                </div>
+                                <!-- Plan 3 — with bounding box -->
+                                <div class="bg-oak-850/80 rounded-lg p-4 border-2 border-signal-amber/60 relative">
+                                    <div
+                                        class="absolute -top-2.5 -right-2 px-2 py-0.5 bg-signal-amber text-black text-[9px] font-bold font-mono rounded tracking-wider">
+                                        DISCREPANCY</div>
+                                    <div class="text-[11px] text-gray-500 font-mono uppercase tracking-wider mb-2">
+                                        Enterprise</div>
+                                    <div class="text-2xl font-bold text-white mb-1">Custom</div>
+                                    <div class="text-[11px] text-signal-amber font-medium">API limits not disclosed
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Scanning overlay line -->
+                            <div class="absolute inset-0 overflow-hidden pointer-events-none">
+                                <div
+                                    class="scan-line absolute left-0 right-0 h-px bg-gradient-to-r from-transparent via-signal-green/40 to-transparent">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Claim Analysis sidebar -->
+                <div class="lg:col-span-2 flex flex-col gap-3">
+                    <!-- Disproven claim -->
+                    <div class="bg-signal-red/[0.05] border border-signal-red/15 rounded-xl p-5">
+                        <div class="flex items-center gap-2 mb-2">
+                            <svg class="w-4 h-4 text-signal-red" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                                stroke-width="3">
+                                <path d="M18 6L6 18M6 6l12 12" />
+                            </svg>
+                            <span class="font-mono text-[11px] text-signal-red font-semibold tracking-wider">DISPROVEN —
+                                CRITICAL</span>
+                        </div>
+                        <p class="text-sm text-gray-300 mb-1.5">"Professional plan is $75/mo per user"</p>
+                        <p class="text-[13px] text-gray-500">Screenshot reveals hidden 5-seat minimum. Actual cost:
+                            <span class="text-signal-red font-semibold">$375/mo minimum</span>, not $75.
+                        </p>
+                        <div class="mt-3 font-mono text-[10px] text-gray-600">Confidence: 0.97 · Source:
+                            visual_receipt_0312.png</div>
+                    </div>
+                    <!-- Disproven claim 2 -->
+                    <div class="bg-signal-amber/[0.05] border border-signal-amber/15 rounded-xl p-5">
+                        <div class="flex items-center gap-2 mb-2">
+                            <svg class="w-4 h-4 text-signal-amber" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                                stroke-width="3">
+                                <path d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span
+                                class="font-mono text-[11px] text-signal-amber font-semibold tracking-wider">DISCREPANCY</span>
+                        </div>
+                        <p class="text-sm text-gray-300 mb-1.5">"Enterprise includes unlimited API calls"</p>
+                        <p class="text-[13px] text-gray-500">Pricing page shows <span
+                                class="text-signal-amber font-semibold">no API limit disclosure</span>. Terms of service
+                            cap at 10K/day.</p>
+                        <div class="mt-3 font-mono text-[10px] text-gray-600">Confidence: 0.89 · Source:
+                            tos_crawl_0312.html</div>
+                    </div>
+                    <!-- Verified claim -->
+                    <div class="bg-signal-green/[0.04] border border-signal-green/15 rounded-xl p-5">
+                        <div class="flex items-center gap-2 mb-2">
+                            <svg class="w-4 h-4 text-signal-green" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                                stroke-width="3">
+                                <path d="M20 6L9 17l-5-5" />
+                            </svg>
+                            <span
+                                class="font-mono text-[11px] text-signal-green font-semibold tracking-wider">VERIFIED</span>
+                        </div>
+                        <p class="text-sm text-gray-300 mb-1.5">"14-day free trial available"</p>
+                        <p class="text-[13px] text-gray-500">Confirmed on pricing page. CTA shows "Start free trial"
+                            with 14-day label.</p>
+                        <div class="mt-3 font-mono text-[10px] text-gray-600">Confidence: 0.99 · Source:
+                            visual_receipt_0312.png</div>
+                    </div>
+                    <!-- Summary -->
+                    <div class="bg-oak-800/40 border border-white/[0.06] rounded-xl p-5 mt-auto">
+                        <div class="font-mono text-[10px] text-gray-600 uppercase tracking-widest mb-3">Audit Summary
+                        </div>
+                        <div class="grid grid-cols-3 gap-3 text-center">
+                            <div>
+                                <div class="text-2xl font-bold text-signal-red">2</div>
+                                <div class="text-[10px] text-gray-500 font-mono">Critical</div>
+                            </div>
+                            <div>
+                                <div class="text-2xl font-bold text-signal-amber">1</div>
+                                <div class="text-[10px] text-gray-500 font-mono">Warning</div>
+                            </div>
+                            <div>
+                                <div class="text-2xl font-bold text-signal-green">4</div>
+                                <div class="text-[10px] text-gray-500 font-mono">Verified</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ══════════════════════════════════════
+         THE SENTINEL DASHBOARD
+         ══════════════════════════════════════ -->
+    <section id="sentinel" class="py-36 px-6 relative z-10 border-t border-white/[0.04]">
+        <div class="max-w-[1200px] mx-auto">
+            <p class="reveal text-[13px] font-semibold text-signal-green uppercase tracking-widest mb-5">The Sentinel
+                Dashboard</p>
+            <h2 class="reveal text-[clamp(28px,4.5vw,44px)] font-extrabold tracking-tight leading-[1.1] mb-5">Neural
+                Memory Bank</h2>
+            <p class="reveal text-[17px] text-gray-400 leading-relaxed max-w-xl mb-16">Persistent intelligence per
+                competitor. Track Truth Decay over time — pricing drift, feature removals, and messaging shifts surfaced
+                before they cost you a deal.</p>
+
+            <div class="reveal grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Chart panel -->
+                <div class="lg:col-span-2 bg-oak-800/40 border border-white/[0.06] rounded-2xl overflow-hidden">
+                    <div class="flex items-center justify-between px-6 py-4 border-b border-white/[0.06]">
+                        <div>
+                            <div class="font-mono text-[10px] text-gray-600 uppercase tracking-widest mb-1">Truth Decay
+                                Index</div>
+                            <div class="text-lg font-bold">HubSpot — 30 Day Trend</div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <span
+                                class="px-2.5 py-1 rounded-md bg-signal-red/10 border border-signal-red/20 font-mono text-[11px] text-signal-red font-semibold">Decay:
+                                34%</span>
+                            <span
+                                class="px-2.5 py-1 rounded-md bg-signal-amber/10 border border-signal-amber/20 font-mono text-[11px] text-signal-amber font-semibold">Risk:
+                                HIGH</span>
+                        </div>
+                    </div>
+                    <div class="p-6">
+                        <canvas id="truthDecayChart" class="w-full" height="260"></canvas>
+                    </div>
+                </div>
+
+                <!-- Memory bank sidebar -->
+                <div class="flex flex-col gap-3">
+                    <div class="bg-oak-800/40 border border-white/[0.06] rounded-xl p-5">
+                        <div class="font-mono text-[10px] text-gray-600 uppercase tracking-widest mb-4">Competitor
+                            Neural Memory</div>
+                        <div class="space-y-3">
+                            <div class="flex items-center justify-between py-2 border-b border-white/[0.04]">
+                                <span class="text-sm text-gray-300">HubSpot</span>
+                                <span class="font-mono text-[12px] text-signal-red font-semibold">Decaying ↓</span>
+                            </div>
+                            <div class="flex items-center justify-between py-2 border-b border-white/[0.04]">
+                                <span class="text-sm text-gray-300">Salesforce</span>
+                                <span class="font-mono text-[12px] text-signal-amber font-semibold">Shifting →</span>
+                            </div>
+                            <div class="flex items-center justify-between py-2 border-b border-white/[0.04]">
+                                <span class="text-sm text-gray-300">Gong</span>
+                                <span class="font-mono text-[12px] text-signal-green font-semibold">Stable ─</span>
+                            </div>
+                            <div class="flex items-center justify-between py-2 border-b border-white/[0.04]">
+                                <span class="text-sm text-gray-300">Outreach</span>
+                                <span class="font-mono text-[12px] text-signal-red font-semibold">Decaying ↓</span>
+                            </div>
+                            <div class="flex items-center justify-between py-2">
+                                <span class="text-sm text-gray-300">ZoomInfo</span>
+                                <span class="font-mono text-[12px] text-signal-amber font-semibold">Shifting →</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-oak-800/40 border border-white/[0.06] rounded-xl p-5">
+                        <div class="font-mono text-[10px] text-gray-600 uppercase tracking-widest mb-3">Last 30 Days
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <div class="text-2xl font-bold text-signal-red">14</div>
+                                <div class="text-[10px] text-gray-500 font-mono">Drift Events</div>
+                            </div>
+                            <div>
+                                <div class="text-2xl font-bold text-signal-amber">7</div>
+                                <div class="text-[10px] text-gray-500 font-mono">Price Changes</div>
+                            </div>
+                            <div>
+                                <div class="text-2xl font-bold text-signal-green">23</div>
+                                <div class="text-[10px] text-gray-500 font-mono">Claims Verified</div>
+                            </div>
+                            <div>
+                                <div class="text-2xl font-bold text-signal-purple">3</div>
+                                <div class="text-[10px] text-gray-500 font-mono">Features Removed</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-signal-green/[0.04] border border-signal-green/15 rounded-xl p-5 mt-auto">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="w-2 h-2 rounded-full bg-signal-green animate-pulse"></span>
+                            <span class="font-mono text-[11px] text-signal-green font-semibold">SENTINEL ACTIVE</span>
+                        </div>
+                        <p class="text-[13px] text-gray-500">Next scan in <span
+                                class="text-signal-green font-mono font-semibold" id="sentinel-countdown">00:42</span>
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ══════════════════════════════════════
+         ARCHITECTURE — Technical Moat
+         ══════════════════════════════════════ -->
+    <section id="architecture" class="py-36 px-6 relative z-10 border-t border-white/[0.04]">
+        <div class="max-w-[1200px] mx-auto">
+            <p class="reveal text-[13px] font-semibold text-signal-green uppercase tracking-widest mb-5">The Technical
+                Moat</p>
+            <h2 class="reveal text-[clamp(28px,4.5vw,44px)] font-extrabold tracking-tight leading-[1.1] mb-5">Google ADK
+                & Gemini 3.1 Stack</h2>
+            <p class="reveal text-[17px] text-gray-400 leading-relaxed max-w-2xl mb-16">Oakwell's Hierarchical
+                Adversarial Architecture is built on the Agent Development Kit with a multi-model Gemini stack. Three
+                proprietary layers create a moat no battle-card tool can replicate.</p>
+
+            <div class="reveal grid grid-cols-1 md:grid-cols-3 gap-5">
+                <!-- Perception Swarm -->
+                <div
+                    class="bg-oak-800/40 border border-signal-green/10 rounded-2xl p-7 hover:border-signal-green/25 transition-all duration-300 group">
+                    <div
+                        class="w-12 h-12 rounded-xl bg-signal-green/[0.08] border border-signal-green/15 flex items-center justify-center mb-5 group-hover:shadow-[0_0_20px_rgba(34,197,94,0.1)] transition-all">
+                        <svg class="w-6 h-6 text-signal-green" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                            stroke-width="1.5">
+                            <path d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                    </div>
+                    <div class="font-mono text-[10px] text-signal-green/50 tracking-widest uppercase mb-3">Layer 01
+                    </div>
+                    <h3 class="text-lg font-bold tracking-tight mb-3">The Perception Swarm</h3>
+                    <p class="text-[13.5px] text-gray-400 leading-relaxed mb-4">Powered by <span
+                            class="text-signal-green font-semibold">Gemini 2.5 Flash</span> for sub-second, parallel
+                        processing of 15+ external data sources.</p>
+                    <div class="flex flex-wrap gap-1.5">
+                        <span
+                            class="px-2 py-1 rounded-md bg-white/[0.03] border border-white/[0.06] font-mono text-[10px] text-gray-500">Web</span>
+                        <span
+                            class="px-2 py-1 rounded-md bg-white/[0.03] border border-white/[0.06] font-mono text-[10px] text-gray-500">Vision</span>
+                        <span
+                            class="px-2 py-1 rounded-md bg-white/[0.03] border border-white/[0.06] font-mono text-[10px] text-gray-500">SEC</span>
+                        <span
+                            class="px-2 py-1 rounded-md bg-white/[0.03] border border-white/[0.06] font-mono text-[10px] text-gray-500">Social</span>
+                        <span
+                            class="px-2 py-1 rounded-md bg-white/[0.03] border border-white/[0.06] font-mono text-[10px] text-gray-500">G2</span>
+                        <span
+                            class="px-2 py-1 rounded-md bg-white/[0.03] border border-white/[0.06] font-mono text-[10px] text-gray-500">Reddit</span>
+                    </div>
+                </div>
+
+                <!-- The Orchestrator -->
+                <div
+                    class="bg-oak-800/40 border border-signal-purple/10 rounded-2xl p-7 hover:border-signal-purple/25 transition-all duration-300 group">
+                    <div
+                        class="w-12 h-12 rounded-xl bg-signal-purple/[0.08] border border-signal-purple/15 flex items-center justify-center mb-5 group-hover:shadow-[0_0_20px_rgba(168,85,247,0.1)] transition-all">
+                        <svg class="w-6 h-6 text-signal-purple" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                            stroke-width="1.5">
+                            <path
+                                d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                        </svg>
+                    </div>
+                    <div class="font-mono text-[10px] text-signal-purple/50 tracking-widest uppercase mb-3">Layer 02
+                    </div>
+                    <h3 class="text-lg font-bold tracking-tight mb-3">The Orchestrator</h3>
+                    <p class="text-[13.5px] text-gray-400 leading-relaxed mb-4">Powered by <span
+                            class="text-signal-purple font-semibold">Gemini 3.1 Pro</span>. Uses a ReAct (Reason +
+                        Action) Loop to double-check every claim against visual proof.</p>
+                    <div
+                        class="bg-signal-purple/[0.05] border border-signal-purple/10 rounded-lg p-3 font-mono text-[11px] text-signal-purple/80 leading-relaxed">
+                        <span class="text-signal-purple">if</span> visual_proof <span
+                            class="text-signal-red">contradicts</span> text →<br>
+                        &nbsp;&nbsp;Bucky triggers <span class="text-signal-amber">Strategic Override</span>
+                    </div>
+                </div>
+
+                <!-- The Stealth Layer -->
+                <div
+                    class="bg-oak-800/40 border border-signal-cyan/10 rounded-2xl p-7 hover:border-signal-cyan/25 transition-all duration-300 group">
+                    <div
+                        class="w-12 h-12 rounded-xl bg-signal-cyan/[0.08] border border-signal-cyan/15 flex items-center justify-center mb-5 group-hover:shadow-[0_0_20px_rgba(6,182,212,0.1)] transition-all">
+                        <svg class="w-6 h-6 text-signal-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                            stroke-width="1.5">
+                            <path
+                                d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                        </svg>
+                    </div>
+                    <div class="font-mono text-[10px] text-signal-cyan/50 tracking-widest uppercase mb-3">Layer 03</div>
+                    <h3 class="text-lg font-bold tracking-tight mb-3">The Stealth Layer</h3>
+                    <p class="text-[13.5px] text-gray-400 leading-relaxed mb-4">Proprietary browser-engine logic that
+                        bypasses enterprise firewalls, allowing agents to see <span
+                            class="text-signal-cyan font-semibold">authenticated data Gong and Apollo cannot
+                            reach</span>.</p>
+                    <div class="flex items-center gap-3 mt-auto">
+                        <div class="flex items-center gap-1.5"><span
+                                class="w-1.5 h-1.5 rounded-full bg-signal-green"></span><span
+                                class="font-mono text-[10px] text-gray-500">Firewall Bypass</span></div>
+                        <div class="flex items-center gap-1.5"><span
+                                class="w-1.5 h-1.5 rounded-full bg-signal-green"></span><span
+                                class="font-mono text-[10px] text-gray-500">Auth Penetration</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Power Metric Banner -->
+            <div
+                class="reveal mt-8 bg-gradient-to-r from-signal-green/[0.04] via-signal-green/[0.08] to-signal-green/[0.04] border border-signal-green/15 rounded-2xl p-8 flex flex-col md:flex-row items-center justify-between gap-6">
+                <div>
+                    <div class="font-mono text-[10px] text-signal-green/60 uppercase tracking-widest mb-2">The Power
+                        Metric</div>
+                    <h3 class="text-xl font-bold tracking-tight">Time-to-Truth</h3>
+                    <p class="text-[14px] text-gray-400 mt-1">From 4 hours of manual research to &lt;10 seconds of
+                        Agentic reasoning.</p>
+                </div>
+                <div class="flex items-center gap-4">
+                    <div class="text-center">
+                        <div class="text-3xl font-extrabold text-gray-500 line-through decoration-signal-red/60">4hrs
+                        </div>
+                        <div class="font-mono text-[10px] text-gray-600">Manual</div>
+                    </div>
+                    <svg class="w-8 h-8 text-signal-green" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                        stroke-width="2">
+                        <path d="M5 12h14M12 5l7 7-7 7" />
+                    </svg>
+                    <div class="text-center">
+                        <div class="text-3xl font-extrabold text-signal-green">&lt;10s</div>
+                        <div class="font-mono text-[10px] text-signal-green/60">Agentic</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ══════════════════════════════════════
+         CTA
+         ══════════════════════════════════════ -->
+    <section id="cta" class="py-36 px-6 relative z-10 border-t border-white/[0.04]">
+        <div class="absolute inset-0 pointer-events-none"
+            style="background:radial-gradient(ellipse at 50% 50%,rgba(34,197,94,0.05) 0%,transparent 60%)"></div>
+        <div class="max-w-[600px] mx-auto text-center relative">
+            <p class="reveal text-[13px] font-semibold text-signal-green uppercase tracking-widest mb-5">Margin
+                Protection Starts Here</p>
+            <h2 class="reveal text-[clamp(30px,5vw,48px)] font-extrabold tracking-tight leading-[1.1] mb-6">
+                Stop losing deals to<br><span class="gradient-text">information asymmetry.</span>
+            </h2>
+            <p class="reveal text-[17px] text-gray-400 leading-relaxed mb-10">
+                Join the teams using autonomous vision AI to verify every competitor claim and defend every dollar in
+                their pipeline.
+            </p>
+            <div class="reveal flex items-center justify-center gap-4">
+                <button onclick="window.open('mailto:team@oakwell.ai?subject=Early Access Request','_blank')"
+                    class="btn-primary inline-flex items-center gap-2 px-7 py-3.5 text-[15px] font-semibold text-black bg-signal-green rounded-xl hover:bg-green-600 transition-all hover:-translate-y-0.5 hover:shadow-[0_8px_30px_rgba(34,197,94,0.35)] relative overflow-hidden">
+                    Get Early Access <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2.5">
+                        <path d="M5 12h14M12 5l7 7-7 7" />
+                    </svg>
+                </button>
+                <button onclick="window.open('mailto:team@oakwell.ai?subject=Oakwell Demo','_blank')"
+                    class="px-7 py-3.5 text-[15px] font-medium text-gray-400 border border-white/[0.06] rounded-xl hover:text-white hover:border-white/10 transition-all">
+                    Book a Demo
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <!-- ══════════════════════════════════════
+         FOOTER
+         ══════════════════════════════════════ -->
+    <footer class="border-t border-white/[0.06] py-16 px-6 relative z-10">
+        <div class="max-w-[1200px] mx-auto flex flex-col md:flex-row justify-between gap-12">
+            <div>
+                <a href="#" class="flex items-center gap-2.5 mb-3">
+                    <div
+                        class="w-7 h-7 rounded-lg bg-signal-green/10 border border-signal-green/20 flex items-center justify-center text-signal-green">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                            <path d="M12 2L2 7V17L12 22L22 17V7L12 2Z" stroke="currentColor" stroke-width="1.5"
+                                stroke-linejoin="round" />
+                            <circle cx="12" cy="12" r="2" fill="currentColor" />
+                        </svg>
+                    </div>
+                    <span class="text-sm font-bold">Oakwell</span>
+                </a>
+                <p class="text-[13px] text-gray-600">Autonomous Revenue Defense System.</p>
+            </div>
+            <div class="flex gap-16">
+                <div class="space-y-3">
+                    <h5 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest">Product</h5>
+                    <a href="#perception"
+                        class="block text-[13px] text-gray-500 hover:text-gray-300 transition-colors">Perception
+                        Layer</a>
+                    <a href="#audit" class="block text-[13px] text-gray-500 hover:text-gray-300 transition-colors">Audit
+                        Display</a>
+                    <a href="#sentinel"
+                        class="block text-[13px] text-gray-500 hover:text-gray-300 transition-colors">Sentinel</a>
+                </div>
+                <div class="space-y-3">
+                    <h5 class="text-[11px] font-semibold text-gray-500 uppercase tracking-widest">Company</h5>
+                    <a href="mailto:team@oakwell.ai"
+                        class="block text-[13px] text-gray-500 hover:text-gray-300 transition-colors">Contact</a>
+                    <a href="#"
+                        class="block text-[13px] text-gray-500 hover:text-gray-300 transition-colors">Careers</a>
+                    <a href="#"
+                        class="block text-[13px] text-gray-500 hover:text-gray-300 transition-colors">Privacy</a>
+                </div>
+            </div>
+        </div>
+        <div class="max-w-[1200px] mx-auto mt-12 pt-6 border-t border-white/[0.04] text-[12px] text-gray-600">
+            © 2026 Oakwell. All rights reserved. Source of Truth for the Modern Sales War Room.
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+
+</html>

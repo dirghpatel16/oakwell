@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+.venv/
+env/
+venv/
+
+# Node
+node_modules/
+oakwell-site-2/node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# ADK sessions
+.adk/
+Oakwell/.adk/
+
+# Outputs
+outputs/memory.json
+
+# Proof screenshots
+outputs/*.png
