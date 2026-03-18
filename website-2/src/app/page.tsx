@@ -1,6 +1,7 @@
 "use client";
 import { useScroll, useTransform, motion, useInView } from "framer-motion";
 import React, { useRef } from "react";
+import Link from "next/link";
 import { GoogleGeminiEffect } from "@/components/ui/google-gemini-effect";
 
 /* ─── REVEAL WRAPPER ─── */
@@ -53,9 +54,14 @@ function Navbar() {
         <a href="#strategy" className="hover:text-white transition-colors duration-200">Strategy</a>
         <a href="#sentinel" className="hover:text-white transition-colors duration-200">Sentinel</a>
       </div>
-      <a href="mailto:dirgh@oakwell.ai" className="px-5 py-2 text-xs font-medium text-black bg-white rounded-full hover:bg-neutral-200 transition-all duration-200">
-        Request Access
-      </a>
+      <div className="flex items-center gap-4">
+        <Link href="/sign-in" className="hidden md:block text-xs font-medium text-neutral-400 hover:text-white transition-colors duration-200">
+          Login
+        </Link>
+        <Link href="/dashboard" className="px-5 py-2 text-xs font-medium text-black bg-white rounded-full hover:bg-neutral-200 transition-all duration-200">
+          Dashboard
+        </Link>
+      </div>
     </nav>
   );
 }
@@ -505,12 +511,12 @@ function CTASection() {
         </Reveal>
         <Reveal delay={0.2}>
           <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
-            <a
-              href="mailto:dirgh@oakwell.ai"
+            <Link
+              href="/dashboard"
               className="px-8 py-3.5 bg-white text-black text-sm font-medium rounded-full hover:bg-neutral-200 transition-all duration-200"
             >
-              Request Early Access
-            </a>
+              Enter Dashboard
+            </Link>
             <a
               href="https://github.com/dirghpatel16/oakwell"
               className="px-8 py-3.5 border border-white/[0.1] text-white text-sm font-medium rounded-full hover:bg-white/[0.04] transition-all duration-200"

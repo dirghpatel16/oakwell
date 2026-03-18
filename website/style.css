@@ -1,73 +1,94 @@
 /* =============================================
-   OAKWELL — Custom styles (Tailwind supplement)
-   Animations, gradients, and custom components
+   OAKWELL — Premium Stylesheet
+   Apollo-grade polish. Clean. Enterprise.
    ============================================= */
 
-/* Grid Background */
-.grid-bg {
-    background-image:
-        linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
-    background-size: 80px 80px;
-    mask-image: radial-gradient(ellipse 60% 60% at 50% 50%, black 20%, transparent 100%);
-    -webkit-mask-image: radial-gradient(ellipse 60% 60% at 50% 50%, black 20%, transparent 100%);
-}
-
-/* Gradient text */
-.gradient-text {
-    background: linear-gradient(135deg, #22c55e 0%, #4ade80 40%, #86efac 60%, #22c55e 100%);
-    background-size: 300% auto;
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    animation: gradient-shift 4s ease infinite;
-}
-
-@keyframes gradient-shift {
-    0% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
-    100% { background-position: 0% 50%; }
-}
-
-/* Ticker animation */
-.ticker-track {
-    animation: ticker-scroll 60s linear infinite;
-}
-
-@keyframes ticker-scroll {
-    0% { transform: translateX(0); }
-    100% { transform: translateX(-50%); }
-}
-
-/* Reveal animation */
+/* ── Reveal Animation ── */
 .reveal {
     opacity: 0;
-    transform: translateY(30px);
-    transition: opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1), transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+    transform: translateY(20px);
+    transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1), transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
 }
-
 .reveal.active {
     opacity: 1;
     transform: translateY(0);
 }
 
-/* Terminal line animation */
-.terminal-line {
-    opacity: 0;
-    transform: translateX(-6px);
-    animation: line-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-    white-space: nowrap;
+/* ── Tab Buttons ── */
+.tab-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #6b7280;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.tab-btn:hover {
+    color: #d1d5db;
+    background: rgba(255,255,255,0.02);
+}
+.tab-btn.active {
+    color: #22c55e;
+    background: rgba(34,197,94,0.06);
+    border-color: rgba(34,197,94,0.15);
 }
 
-@keyframes line-in {
+/* ── Tab Panels ── */
+.tab-panel {
+    animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.tab-panel.hidden {
+    display: none;
+}
+@keyframes fadeUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── FAQ Accordion ── */
+.faq-item {
+    transition: border-color 0.2s ease;
+}
+.faq-item:hover {
+    border-color: rgba(255,255,255,0.08);
+}
+.faq-toggle {
+    background: none;
+    border: none;
+    cursor: pointer;
+}
+.faq-icon.rotated {
+    transform: rotate(180deg);
+}
+.faq-answer {
+    animation: fadeIn 0.3s ease;
+}
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* ── Terminal Line Animation ── */
+.terminal-line {
+    opacity: 0;
+    transform: translateX(-4px);
+    animation: lineIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    white-space: nowrap;
+}
+@keyframes lineIn {
     to { opacity: 1; transform: translateX(0); }
 }
 
-/* Scan line animation for audit display */
+/* ── Scan Line ── */
 .scan-line {
     animation: scan 3s ease-in-out infinite;
 }
-
 @keyframes scan {
     0% { top: -2px; opacity: 0; }
     10% { opacity: 1; }
@@ -75,32 +96,31 @@
     100% { top: 100%; opacity: 0; }
 }
 
-/* Button shine effect */
+/* ── Button Shine ── */
 .btn-primary::before {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(135deg, transparent 40%, rgba(255,255,255,0.15) 50%, transparent 60%);
+    background: linear-gradient(135deg, transparent 40%, rgba(255,255,255,0.12) 50%, transparent 60%);
     background-size: 250% 100%;
-    animation: btn-shine 3s ease infinite;
+    animation: btnShine 3s ease infinite;
 }
-
-@keyframes btn-shine {
+@keyframes btnShine {
     0% { background-position: 200% 0; }
     100% { background-position: -200% 0; }
 }
 
-/* Scrollbar */
+/* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 10px; }
 html { scrollbar-width: thin; scrollbar-color: #3f3f46 transparent; }
 
-/* Selection */
+/* ── Selection ── */
 ::selection { background: rgba(34,197,94,0.2); color: #fff; }
 
-/* Perception layer pulse */
-@keyframes node-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.2); }
-    50% { box-shadow: 0 0 0 8px rgba(34,197,94,0); }
+/* ── Responsive table ── */
+@media (max-width: 640px) {
+    table { font-size: 11px; }
+    table th, table td { padding: 12px 10px; }
 }

@@ -10,6 +10,35 @@
 :root {
   --background: #000000;
   --foreground: #ffffff;
+
+  /* Oakwell Terminal Theme — CSS Custom Properties */
+  --oak-bg-primary: #050505;
+  --oak-bg-secondary: #0a0a0a;
+  --oak-bg-elevated: #111111;
+  --oak-border: #1a1a1a;
+  --oak-border-subtle: rgba(39, 39, 42, 0.5);
+  --oak-text-primary: #fafafa;
+  --oak-text-secondary: #a1a1aa;
+  --oak-text-muted: #52525b;
+  --oak-text-dim: #3f3f46;
+  
+  /* Accent Colors */
+  --oak-accent-blue: #3b82f6;
+  --oak-accent-green: #22c55e;
+  --oak-accent-red: #ef4444;
+  --oak-accent-amber: #f59e0b;
+  --oak-accent-purple: #8b5cf6;
+  
+  /* Severity */
+  --oak-critical: #ef4444;
+  --oak-high: #f97316;
+  --oak-medium: #eab308;
+  --oak-low: #6b7280;
+  
+  /* Terminal Glow */
+  --oak-glow-blue: rgba(59, 130, 246, 0.15);
+  --oak-glow-green: rgba(34, 197, 94, 0.15);
+  --oak-glow-red: rgba(239, 68, 68, 0.15);
 }
 
 html {
@@ -17,40 +46,126 @@ html {
 }
 
 body {
-  background: #000;
-  color: #fff;
+  background: var(--oak-bg-primary);
+  color: var(--oak-text-primary);
   font-family: var(--font-sans);
 }
 
 /* Marquee animation */
 @keyframes marquee {
-  0% {
-    transform: translateX(0%);
-  }
-  100% {
-    transform: translateX(-50%);
-  }
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(-50%); }
 }
-
 .animate-marquee {
   animation: marquee 40s linear infinite;
 }
 
-/* Custom scrollbar */
+/* Shimmer animation for progress bars */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.animate-shimmer {
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
+}
+
+/* Pulse ring for live indicators */
+@keyframes pulse-ring {
+  0% { transform: scale(0.8); opacity: 1; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+.animate-pulse-ring {
+  animation: pulse-ring 1.5s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+}
+
+/* Terminal cursor blink */
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+.animate-blink {
+  animation: blink 1s step-end infinite;
+}
+
+/* Slide in from right for notifications */
+@keyframes slide-in-right {
+  0% { transform: translateX(100%); opacity: 0; }
+  100% { transform: translateX(0); opacity: 1; }
+}
+.animate-slide-in-right {
+  animation: slide-in-right 0.3s ease-out;
+}
+
+/* Fade up for content */
+@keyframes fade-up {
+  0% { transform: translateY(8px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+.animate-fade-up {
+  animation: fade-up 0.4s ease-out;
+}
+
+/* Terminal scanline effect (subtle) */
+@keyframes scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+.terminal-scanline::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(to right, transparent, rgba(59, 130, 246, 0.08), transparent);
+  animation: scanline 8s linear infinite;
+  pointer-events: none;
+}
+
+/* Custom scrollbar (refined) */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #000;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #222;
-  border-radius: 3px;
+  background: #1a1a1a;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2a2a2a;
 }
 
 ::selection {
-  background: rgba(16, 185, 129, 0.3);
+  background: rgba(59, 130, 246, 0.3);
   color: #fff;
+}
+
+/* Focus visible styles */
+*:focus-visible {
+  outline: 1px solid var(--oak-accent-blue);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Mobile-specific overrides */
+@media (max-width: 768px) {
+  ::-webkit-scrollbar {
+    display: none;
+  }
+  body {
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* Print styles - hide non-essential elements */
+@media print {
+  nav, aside, header { display: none !important; }
+  .no-print { display: none !important; }
 }
