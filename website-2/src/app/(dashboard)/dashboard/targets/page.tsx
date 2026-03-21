@@ -1,5 +1,5 @@
 "use client";
-import React from "react";
+import React, { useMemo } from "react";
 import { 
   Globe, 
   TrendingUp, 
@@ -15,76 +15,55 @@ import {
   Loader2
 } from "lucide-react";
 import { useWebSocket } from "@/lib/websocket-context";
-
-// Mock data based on actual Oakwell agent outputs
-const COMPETITORS = [
-  {
-    name: "Gong",
-    domain: "gong.io",
-    status: "active",
-    lastScan: "2 min ago",
-    pagesTracked: 47,
-    changesThisWeek: 3,
-    threatLevel: "high",
-    recentChanges: [
-      { page: "/pricing", type: "pricing_change", detail: "Enterprise tier increased from $130 to $155/seat", time: "Today, 10:42 AM", severity: "critical" },
-      { page: "/product/copilot", type: "feature_launch", detail: "New 'Revenue AI Copilot' feature page added", time: "Yesterday, 3:15 PM", severity: "high" },
-      { page: "/customers", type: "messaging_shift", detail: "Added 12 new enterprise logos including Stripe", time: "2 days ago", severity: "medium" },
-    ]
-  },
-  {
-    name: "Clari",
-    domain: "clari.com",
-    status: "active",
-    lastScan: "5 min ago",
-    pagesTracked: 38,
-    changesThisWeek: 5,
-    threatLevel: "critical",
-    recentChanges: [
-      { page: "/pricing", type: "pricing_change", detail: "New 'Enterprise Plus' tier at $140/user with AI Copilot bundle", time: "Today, 9:15 AM", severity: "critical" },
-      { page: "/platform", type: "feature_launch", detail: "Launched RevAI — generative forecasting engine", time: "Today, 8:30 AM", severity: "critical" },
-      { page: "/blog", type: "messaging_shift", detail: "Published 'Why Gong customers are switching to Clari'", time: "Yesterday", severity: "high" },
-      { page: "/integrations", type: "feature_launch", detail: "Added native HubSpot CRM sync", time: "3 days ago", severity: "medium" },
-      { page: "/security", type: "messaging_shift", detail: "SOC 2 Type II badge added to footer", time: "4 days ago", severity: "low" },
-    ]
-  },
-  {
-    name: "Chorus (ZoomInfo)",
-    domain: "chorus.ai",
-    status: "active",
-    lastScan: "8 min ago",
-    pagesTracked: 29,
-    changesThisWeek: 1,
-    threatLevel: "low",
-    recentChanges: [
-      { page: "/pricing", type: "pricing_change", detail: "Removed public pricing page — 'Contact Sales' only", time: "3 days ago", severity: "medium" },
-    ]
-  },
-  {
-    name: "Outreach",
-    domain: "outreach.io",
-    status: "active",
-    lastScan: "12 min ago",
-    pagesTracked: 52,
-    changesThisWeek: 2,
-    threatLevel: "medium",
-    recentChanges: [
-      { page: "/product/kaia", type: "feature_launch", detail: "Kaia AI now supports real-time competitor mention alerts", time: "Yesterday", severity: "high" },
-      { page: "/pricing", type: "pricing_change", detail: "Professional tier discounted 15% for annual contracts", time: "2 days ago", severity: "medium" },
-    ]
-  },
-];
-
-const SCAN_STATS = {
-  totalPages: 166,
-  scansToday: 1247,
-  changesDetected: 11,
-  screenshotsCaptured: 34,
-};
+import { useMemory, useSentinelStatus } from "@/lib/hooks";
+import { getProofUrl } from "@/lib/api";
 
 export default function MarketSentinelPage() {
   const { triggerScan, liveOperations } = useWebSocket();
+  const { data: memory, loading: memLoading } = useMemory();
+  const { data: sentinel } = useSentinelStatus();
   const isScanning = liveOperations.some(o => o.type === "scan");
+
+  // Derive competitor data from memory bank
+  const competitors = useMemo(() => {
+    if (!memory) return [];
+    return Object.entries(memory).map(([url, entry]) => {
+      const name = url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+      const score = entry.deal_health_score || 0;
+      const threatLevel = score < 40 ? "critical" : score < 55 ? "high" : score < 70 ? "medium" : "low";
+      
+      // Build recent changes from timeline
+      const changes = (entry.timeline || []).slice(-5).reverse().map((t) => ({
+        page: url,
+        type: "analysis" as const,
+        detail: t.top_clash || "Score update",
+        time: t.ts ? new Date(t.ts).toLocaleString() : "Unknown",
+        severity: t.score < 40 ? "critical" : t.score < 65 ? "high" : t.score < 80 ? "medium" : "low",
+        score: t.score,
+      }));
+
+      return {
+        name,
+        domain: url,
+        status: "active",
+        lastScan: entry.last_analysis_ts ? timeAgo(entry.last_analysis_ts) : "Never",
+        analysisCount: entry.analysis_count || 0,
+        changesThisWeek: changes.length,
+        threatLevel,
+        score,
+        proofFiles: entry.proof_filenames || [],
+        clashes: entry.clashes_detected || "",
+        recentChanges: changes,
+      };
+    }).sort((a, b) => a.score - b.score); // Most risky first
+  }, [memory]);
+
+  const scanStats = useMemo(() => ({
+    totalCompetitors: competitors.length,
+    watchedUrls: sentinel?.watched_urls || 0,
+    totalAnalyses: competitors.reduce((s, c) => s + c.analysisCount, 0),
+    proofsCaptured: competitors.reduce((s, c) => s + c.proofFiles.length, 0),
+  }), [competitors, sentinel]);
 
   return (
     <div className="p-6 md:p-8 max-w-[1600px] mx-auto space-y-8">
@@ -105,7 +84,7 @@ export default function MarketSentinelPage() {
               {isScanning ? "SCANNING..." : "WATCHING"}
             </div>
             <span className="text-zinc-600">|</span>
-            <span className="text-zinc-400">{SCAN_STATS.totalPages} PAGES</span>
+            <span className="text-zinc-400">{scanStats.watchedUrls} URLS</span>
           </div>
           <button 
             onClick={() => triggerScan("All Competitors")}
@@ -120,15 +99,32 @@ export default function MarketSentinelPage() {
 
       {/* Scan Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard icon={<Globe className="w-4 h-4" />} label="Pages Tracked" value={SCAN_STATS.totalPages.toString()} />
-        <StatCard icon={<Eye className="w-4 h-4" />} label="Scans Today" value={SCAN_STATS.scansToday.toLocaleString()} />
-        <StatCard icon={<AlertTriangle className="w-4 h-4" />} label="Changes Detected" value={SCAN_STATS.changesDetected.toString()} accent="text-amber-400" />
-        <StatCard icon={<Camera className="w-4 h-4" />} label="Screenshots Captured" value={SCAN_STATS.screenshotsCaptured.toString()} />
+        <StatCard icon={<Globe className="w-4 h-4" />} label="Competitors Tracked" value={scanStats.totalCompetitors.toString()} />
+        <StatCard icon={<Eye className="w-4 h-4" />} label="Watched URLs" value={scanStats.watchedUrls.toString()} />
+        <StatCard icon={<AlertTriangle className="w-4 h-4" />} label="Total Analyses" value={scanStats.totalAnalyses.toString()} accent="text-amber-400" />
+        <StatCard icon={<Camera className="w-4 h-4" />} label="Proofs Captured" value={scanStats.proofsCaptured.toString()} />
       </div>
+
+      {/* Loading State */}
+      {memLoading && competitors.length === 0 && (
+        <div className="flex items-center justify-center py-12 gap-3 text-zinc-500">
+          <Loader2 className="w-5 h-5 animate-spin" />
+          <span className="text-sm">Loading competitor intelligence...</span>
+        </div>
+      )}
+
+      {/* Empty State */}
+      {!memLoading && competitors.length === 0 && (
+        <div className="text-center py-16 space-y-3">
+          <Globe className="w-8 h-8 text-zinc-700 mx-auto" />
+          <p className="text-sm text-zinc-500">No competitors tracked yet. Run a deal analysis to start monitoring.</p>
+          <a href="/dashboard/deals" className="text-xs text-blue-400 underline">Go to Deal Desk →</a>
+        </div>
+      )}
 
       {/* Competitor Grid */}
       <div className="space-y-6">
-        {COMPETITORS.map((comp) => (
+        {competitors.map((comp) => (
           <CompetitorCard key={comp.domain} competitor={comp} />
         ))}
       </div>
@@ -148,7 +144,7 @@ function StatCard({ icon, label, value, accent }: { icon: React.ReactNode; label
   );
 }
 
-function CompetitorCard({ competitor }: { competitor: typeof COMPETITORS[0] }) {
+function CompetitorCard({ competitor }: { competitor: { name: string; domain: string; lastScan: string; analysisCount: number; changesThisWeek: number; threatLevel: string; score: number; proofFiles: string[]; clashes: string; recentChanges: { page: string; type: string; detail: string; time: string; severity: string; score: number }[] } }) {
   const threatColors: Record<string, string> = {
     critical: "bg-red-500/10 text-red-400 border-red-500/20",
     high: "bg-orange-500/10 text-orange-400 border-orange-500/20",
@@ -162,55 +158,75 @@ function CompetitorCard({ competitor }: { competitor: typeof COMPETITORS[0] }) {
       <div className="px-5 py-4 border-b border-zinc-800/50 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <div className="w-10 h-10 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-sm font-bold text-white">
-            {competitor.name.charAt(0)}
+            {competitor.name.charAt(0).toUpperCase()}
           </div>
           <div>
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-semibold text-white">{competitor.name}</h3>
-              <span className={`text-[9px] uppercase tracking-wider font-medium px-1.5 py-0.5 rounded border ${threatColors[competitor.threatLevel]}`}>
+              <span className={`text-[9px] uppercase tracking-wider font-medium px-1.5 py-0.5 rounded border ${threatColors[competitor.threatLevel] || threatColors.medium}`}>
                 {competitor.threatLevel} threat
               </span>
+              <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
+                competitor.score >= 70 ? "bg-green-500/10 text-green-400" :
+                competitor.score >= 40 ? "bg-yellow-500/10 text-yellow-400" :
+                "bg-red-500/10 text-red-400"
+              }`}>{competitor.score}/100</span>
             </div>
             <div className="flex items-center gap-3 mt-0.5 text-[10px] text-zinc-500 font-mono">
               <span>{competitor.domain}</span>
               <span>•</span>
-              <span>{competitor.pagesTracked} pages</span>
+              <span>{competitor.analysisCount} analyses</span>
               <span>•</span>
               <span className="flex items-center gap-1"><Clock className="w-2.5 h-2.5" /> {competitor.lastScan}</span>
             </div>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs font-mono text-zinc-400 bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800">
-            {competitor.changesThisWeek} changes this week
-          </span>
-          <button className="text-zinc-500 hover:text-white transition-colors">
+          {competitor.proofFiles.length > 0 && (
+            <span className="text-xs font-mono text-zinc-400 bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800">
+              {competitor.proofFiles.length} proofs
+            </span>
+          )}
+          <a href={competitor.domain.startsWith("http") ? competitor.domain : `https://${competitor.domain}`} target="_blank" rel="noopener noreferrer" className="text-zinc-500 hover:text-white transition-colors">
             <ExternalLink className="w-4 h-4" />
-          </button>
+          </a>
         </div>
       </div>
 
-      {/* Change Log */}
-      <div className="divide-y divide-zinc-800/30">
-        {competitor.recentChanges.map((change, i) => (
-          <ChangeRow key={i} change={change} />
-        ))}
-      </div>
+      {/* Clashes summary */}
+      {competitor.clashes && (
+        <div className="px-5 py-3 border-b border-zinc-800/30 bg-zinc-900/20">
+          <p className="text-xs text-zinc-400 leading-relaxed line-clamp-2">{competitor.clashes}</p>
+        </div>
+      )}
+
+      {/* Timeline Log */}
+      {competitor.recentChanges.length > 0 ? (
+        <div className="divide-y divide-zinc-800/30">
+          {competitor.recentChanges.map((change, i) => (
+            <ChangeRow key={i} change={change} />
+          ))}
+        </div>
+      ) : (
+        <div className="px-5 py-3 text-xs text-zinc-600">No timeline data available.</div>
+      )}
     </div>
   );
 }
 
-function ChangeRow({ change }: { change: { page: string; type: string; detail: string; time: string; severity: string } }) {
+function ChangeRow({ change }: { change: { page: string; type: string; detail: string; time: string; severity: string; score: number } }) {
   const typeIcons: Record<string, React.ReactNode> = {
     pricing_change: <TrendingUp className="w-3.5 h-3.5 text-red-400" />,
     feature_launch: <CheckCircle2 className="w-3.5 h-3.5 text-blue-400" />,
     messaging_shift: <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />,
+    analysis: <Eye className="w-3.5 h-3.5 text-zinc-400" />,
   };
 
   const typeLabels: Record<string, string> = {
     pricing_change: "Pricing",
     feature_launch: "Feature",
     messaging_shift: "Messaging",
+    analysis: "Analysis",
   };
 
   const severityDots: Record<string, string> = {
@@ -232,11 +248,24 @@ function ChangeRow({ change }: { change: { page: string; type: string; detail: s
           <span className={`w-1.5 h-1.5 rounded-full ${severityDots[change.severity]}`} />
         </div>
         <p className="text-sm text-zinc-300 leading-snug">{change.detail}</p>
+        {change.score > 0 && (
+          <span className={`text-[9px] font-mono mt-0.5 ${
+            change.score >= 70 ? "text-green-500" : change.score >= 40 ? "text-yellow-500" : "text-red-500"
+          }`}>Score: {change.score}</span>
+        )}
       </div>
       <div className="text-[10px] font-mono text-zinc-600 shrink-0 mt-0.5">{change.time}</div>
-      <button className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] text-blue-400 hover:text-blue-300 shrink-0 mt-0.5 flex items-center gap-1">
-        <Camera className="w-3 h-3" /> View Proof
-      </button>
     </div>
   );
+}
+
+function timeAgo(ts: string): string {
+  const diff = Date.now() - new Date(ts).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
 }

@@ -1,5 +1,5 @@
 "use client";
-import React from "react";
+import React, { useMemo } from "react";
 import {
   BarChart,
   Bar,
@@ -8,58 +8,18 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  LineChart,
-  Line,
   Area,
   AreaChart,
   PieChart,
   Pie,
   Cell,
 } from "recharts";
-import { TrendingUp, TrendingDown, ArrowUpRight, Target, Trophy, ShieldAlert } from "lucide-react";
+import { TrendingDown, ArrowUpRight, Loader2 } from "lucide-react";
+import { useMemory, useWinningPatterns } from "@/lib/hooks";
 
-// Mock data modeled after real CRO dashboards (Clari/Gong style)
-const PIPELINE_DATA = [
-  { stage: "Discovery", value: 420000, deals: 8, color: "#3b82f6" },
-  { stage: "Demo", value: 310000, deals: 5, color: "#6366f1" },
-  { stage: "Negotiation", value: 220000, deals: 3, color: "#8b5cf6" },
-  { stage: "Best Case", value: 185000, deals: 4, color: "#a855f7" },
-  { stage: "Commit", value: 162000, deals: 2, color: "#22c55e" },
-  { stage: "Closed Won", value: 95000, deals: 1, color: "#10b981" },
-];
+const CHART_COLORS = ["#ef4444", "#f97316", "#3b82f6", "#8b5cf6", "#22c55e", "#eab308"];
 
-const WIN_RATE_TREND = [
-  { month: "Oct", rate: 31, deals: 12 },
-  { month: "Nov", rate: 34, deals: 15 },
-  { month: "Dec", rate: 28, deals: 10 },
-  { month: "Jan", rate: 38, deals: 18 },
-  { month: "Feb", rate: 42, deals: 14 },
-  { month: "Mar", rate: 46, deals: 8 },
-];
-
-const COMPETITOR_WINS = [
-  { name: "vs Gong", wins: 12, losses: 8, winRate: 60 },
-  { name: "vs Clari", wins: 7, losses: 10, winRate: 41 },
-  { name: "vs Outreach", wins: 9, losses: 4, winRate: 69 },
-  { name: "vs Chorus", wins: 15, losses: 3, winRate: 83 },
-  { name: "No Comp", wins: 22, losses: 5, winRate: 81 },
-];
-
-const FORECAST_WEEKLY = [
-  { week: "W1", target: 200000, actual: 95000, pipeline: 420000 },
-  { week: "W2", target: 400000, actual: 180000, pipeline: 380000 },
-  { week: "W3", target: 600000, actual: 310000, pipeline: 350000 },
-  { week: "W4", target: 800000, actual: null, pipeline: 320000 },
-];
-
-const LOSS_REASONS = [
-  { reason: "Pricing", value: 35, color: "#ef4444" },
-  { reason: "Feature Gap", value: 25, color: "#f97316" },
-  { reason: "No Decision", value: 20, color: "#eab308" },
-  { reason: "Competitor", value: 15, color: "#8b5cf6" },
-  { reason: "Other", value: 5, color: "#6b7280" },
-];
-
+/* eslint-disable @typescript-eslint/no-explicit-any */
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (active && payload && payload.length) {
     return (
@@ -67,9 +27,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
         <p className="text-zinc-400 font-mono mb-1">{label}</p>
         {payload.map((entry: any, i: number) => (
           <p key={i} className="text-white font-medium">
-            {entry.name}: {typeof entry.value === "number" && entry.value > 1000 
-              ? `$${(entry.value / 1000).toFixed(0)}K` 
-              : entry.value}
+            {entry.name}: {entry.value}
           </p>
         ))}
       </div>
@@ -79,9 +37,82 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 export default function ForecastPage() {
-  const totalPipeline = PIPELINE_DATA.reduce((sum, s) => sum + s.value, 0);
-  const quotaTarget = 800000;
-  const attainment = Math.round((95000 / quotaTarget) * 100);
+  const { data: memory, loading: memLoading } = useMemory();
+  const { data: patterns, loading: patLoading } = useWinningPatterns();
+
+  const loading = memLoading || patLoading;
+
+  // Derive health score distribution (bar chart per competitor)
+  const scoreDistribution = useMemo(() => {
+    if (!memory) return [];
+    return Object.entries(memory).map(([url, e], i) => ({
+      name: url.replace(/^https?:\/\//, "").replace(/\/$/, "").slice(0, 15),
+      score: e.deal_health_score || 0,
+      color: CHART_COLORS[i % CHART_COLORS.length],
+    })).sort((a, b) => a.score - b.score);
+  }, [memory]);
+
+  // Score trend across all analyses
+  const scoreTrend = useMemo(() => {
+    if (!memory) return [];
+    const all: { ts: string; score: number }[] = [];
+    Object.values(memory).forEach(e => {
+      if (e.timeline) {
+        e.timeline.forEach(t => {
+          if (t.ts) all.push({ ts: t.ts, score: t.score });
+        });
+      }
+    });
+    return all
+      .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime())
+      .map((item, i) => ({ analysis: `#${i + 1}`, score: item.score }));
+  }, [memory]);
+
+
+
+  // Risk breakdown (pie chart)
+  const riskBreakdown = useMemo(() => {
+    if (!memory) return [];
+    let critical = 0, high = 0, medium = 0, low = 0;
+    Object.values(memory).forEach(e => {
+      const s = e.deal_health_score || 0;
+      if (s < 40) critical++;
+      else if (s < 55) high++;
+      else if (s < 70) medium++;
+      else low++;
+    });
+    return [
+      { reason: "Critical (<40)", value: critical, color: "#ef4444" },
+      { reason: "High (40-54)", value: high, color: "#f97316" },
+      { reason: "Medium (55-69)", value: medium, color: "#eab308" },
+      { reason: "Low (70+)", value: low, color: "#22c55e" },
+    ].filter(r => r.value > 0);
+  }, [memory]);
+
+  // Top-line metrics
+  const metrics = useMemo(() => {
+    if (!memory) return { total: 0, avgScore: 0, riskCount: 0, analyses: 0 };
+    const entries = Object.values(memory);
+    const scores = entries.map(e => e.deal_health_score || 0);
+    const avg = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+    const risk = scores.filter(s => s < 55).length;
+    const analyses = entries.reduce((sum, e) => sum + (e.timeline?.length || 0), 0);
+    return { total: entries.length, avgScore: avg, riskCount: risk, analyses };
+  }, [memory]);
+
+  const winRate = useMemo(() => {
+    if (!patterns) return 0;
+    return patterns.total_outcomes > 0 ? Math.round(patterns.win_rate * 100) : 0;
+  }, [patterns]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full gap-3 py-20">
+        <Loader2 className="w-5 h-5 text-zinc-500 animate-spin" />
+        <span className="text-sm text-zinc-500 font-mono">Loading forecast data...</span>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 md:p-8 max-w-[1600px] mx-auto space-y-8">
@@ -89,15 +120,17 @@ export default function ForecastPage() {
       {/* Header */}
       <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between border-b border-zinc-800 pb-6">
         <div>
-          <h1 className="text-2xl font-semibold text-white tracking-tight">Revenue Forecast</h1>
-          <p className="text-sm text-zinc-500 mt-1">Q1 2026 — Pipeline health, win rates, and competitive performance</p>
+          <h1 className="text-2xl font-semibold text-white tracking-tight">Competitive Forecast</h1>
+          <p className="text-sm text-zinc-500 mt-1">Win/loss patterns, risk distribution, and competitive performance</p>
         </div>
         <div className="flex items-center gap-3 text-xs font-mono">
           <span className="bg-zinc-900 border border-zinc-800 px-3 py-1 rounded text-zinc-400">
-            Quota: ${(quotaTarget / 1000).toFixed(0)}K
+            {metrics.total} Competitors
           </span>
-          <span className={`px-3 py-1 rounded border ${attainment >= 80 ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-red-500/10 text-red-400 border-red-500/20"}`}>
-            {attainment}% Attainment
+          <span className={`px-3 py-1 rounded border ${
+            winRate >= 50 ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-red-500/10 text-red-400 border-red-500/20"
+          }`}>
+            {winRate}% Win Rate
           </span>
         </div>
       </div>
@@ -105,135 +138,120 @@ export default function ForecastPage() {
       {/* Top Metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <MetricCard 
-          title="Total Pipeline" 
-          value={`$${(totalPipeline / 1000).toFixed(0)}K`} 
-          subtitle={`${PIPELINE_DATA.reduce((s, d) => s + d.deals, 0)} active deals`}
-          trend="+12%" 
-          trendType="good" 
+          title="Competitors Tracked" 
+          value={String(metrics.total)} 
+          subtitle={`${metrics.riskCount} at risk`}
+          trend={metrics.riskCount === 0 ? "Clean" : `${metrics.riskCount} flagged`} 
+          trendType={metrics.riskCount === 0 ? "good" : "bad"} 
         />
         <MetricCard 
-          title="Q1 Win Rate" 
-          value="42%" 
-          subtitle="vs 34% industry avg"
-          trend="+8%" 
-          trendType="good" 
+          title="Win Rate" 
+          value={`${winRate}%`} 
+          subtitle={`${patterns ? Math.round(patterns.win_rate * patterns.total_outcomes) : 0}W / ${patterns ? patterns.total_outcomes - Math.round(patterns.win_rate * patterns.total_outcomes) : 0}L`}
+          trend={winRate >= 50 ? "Winning" : "Losing"} 
+          trendType={winRate >= 50 ? "good" : "bad"} 
         />
         <MetricCard 
-          title="Avg Deal Cycle" 
-          value="45 Days" 
-          subtitle="Down from 52 last quarter"
-          trend="-7 days" 
-          trendType="good" 
+          title="Avg Health Score" 
+          value={`${metrics.avgScore}/100`} 
+          subtitle="Across all competitors"
+          trend={metrics.avgScore >= 60 ? "Healthy" : "At Risk"} 
+          trendType={metrics.avgScore >= 60 ? "good" : "bad"} 
         />
         <MetricCard 
-          title="Pipeline Coverage" 
-          value={`${(totalPipeline / quotaTarget).toFixed(1)}x`} 
-          subtitle={`Need 3x for ${quotaTarget / 1000}K target`}
-          trend={totalPipeline / quotaTarget >= 3 ? "Healthy" : "At Risk"} 
-          trendType={totalPipeline / quotaTarget >= 3 ? "good" : "bad"} 
+          title="Total Analyses" 
+          value={String(metrics.analyses)} 
+          subtitle="Intelligence runs completed"
+          trend="Active" 
+          trendType="good" 
         />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
-        {/* Pipeline by Stage */}
+        {/* Score Distribution */}
         <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-5">
-          <h3 className="text-sm font-semibold text-zinc-200 uppercase tracking-wider mb-4">Pipeline by Stage</h3>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={PIPELINE_DATA} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-              <XAxis dataKey="stage" tick={{ fontSize: 10, fill: "#71717a" }} axisLine={{ stroke: "#27272a" }} />
-              <YAxis tick={{ fontSize: 10, fill: "#71717a" }} axisLine={{ stroke: "#27272a" }} tickFormatter={(v) => `$${v / 1000}K`} />
-              <Tooltip content={<CustomTooltip />} />
-              <Bar dataKey="value" name="Pipeline" radius={[4, 4, 0, 0]}>
-                {PIPELINE_DATA.map((entry, i) => (
-                  <Cell key={i} fill={entry.color} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Win Rate Trend */}
-        <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-5">
-          <h3 className="text-sm font-semibold text-zinc-200 uppercase tracking-wider mb-4">Win Rate Trend (6mo)</h3>
-          <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={WIN_RATE_TREND} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-              <defs>
-                <linearGradient id="winGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-              <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#71717a" }} axisLine={{ stroke: "#27272a" }} />
-              <YAxis tick={{ fontSize: 10, fill: "#71717a" }} axisLine={{ stroke: "#27272a" }} tickFormatter={(v) => `${v}%`} />
-              <Tooltip content={<CustomTooltip />} />
-              <Area type="monotone" dataKey="rate" name="Win Rate" stroke="#22c55e" strokeWidth={2} fill="url(#winGrad)" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Competitive Win/Loss */}
-        <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-5">
-          <h3 className="text-sm font-semibold text-zinc-200 uppercase tracking-wider mb-4">Competitive Win/Loss</h3>
-          <div className="space-y-3">
-            {COMPETITOR_WINS.map((comp) => (
-              <div key={comp.name} className="flex items-center gap-4">
-                <span className="text-xs text-zinc-400 w-24 shrink-0 font-mono">{comp.name}</span>
-                <div className="flex-1 h-6 bg-zinc-900 rounded-full overflow-hidden flex">
-                  <div 
-                    className="h-full bg-green-500/80 flex items-center justify-end pr-2"
-                    style={{ width: `${comp.winRate}%` }}
-                  >
-                    <span className="text-[9px] font-mono text-white font-bold">{comp.wins}W</span>
-                  </div>
-                  <div 
-                    className="h-full bg-red-500/60 flex items-center pl-2"
-                    style={{ width: `${100 - comp.winRate}%` }}
-                  >
-                    <span className="text-[9px] font-mono text-white font-bold">{comp.losses}L</span>
-                  </div>
-                </div>
-                <span className={`text-xs font-mono w-10 text-right ${comp.winRate >= 50 ? "text-green-400" : "text-red-400"}`}>
-                  {comp.winRate}%
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Loss Reasons */}
-        <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-5">
-          <h3 className="text-sm font-semibold text-zinc-200 uppercase tracking-wider mb-4">Loss Reasons (Q1)</h3>
-          <div className="flex items-center gap-8">
-            <ResponsiveContainer width={160} height={160}>
-              <PieChart>
-                <Pie 
-                  data={LOSS_REASONS} 
-                  dataKey="value" 
-                  cx="50%" 
-                  cy="50%" 
-                  innerRadius={45} 
-                  outerRadius={70} 
-                  strokeWidth={0}
-                >
-                  {LOSS_REASONS.map((entry, i) => (
+          <h3 className="text-sm font-semibold text-zinc-200 uppercase tracking-wider mb-4">Health Score by Competitor</h3>
+          {scoreDistribution.length > 0 ? (
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={scoreDistribution} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#71717a" }} axisLine={{ stroke: "#27272a" }} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: "#71717a" }} axisLine={{ stroke: "#27272a" }} />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar dataKey="score" name="Health Score" radius={[4, 4, 0, 0]}>
+                  {scoreDistribution.map((entry, i) => (
                     <Cell key={i} fill={entry.color} />
                   ))}
-                </Pie>
-              </PieChart>
+                </Bar>
+              </BarChart>
             </ResponsiveContainer>
-            <div className="space-y-2.5 flex-1">
-              {LOSS_REASONS.map((r) => (
-                <div key={r.reason} className="flex items-center gap-3">
-                  <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: r.color }} />
-                  <span className="text-xs text-zinc-400 flex-1">{r.reason}</span>
-                  <span className="text-xs font-mono text-zinc-300">{r.value}%</span>
-                </div>
-              ))}
+          ) : (
+            <div className="flex items-center justify-center h-[280px] text-zinc-600 text-xs">No data yet</div>
+          )}
+        </div>
+
+        {/* Score Trend */}
+        <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-5">
+          <h3 className="text-sm font-semibold text-zinc-200 uppercase tracking-wider mb-4">Score Trend Over Time</h3>
+          {scoreTrend.length > 0 ? (
+            <ResponsiveContainer width="100%" height={280}>
+              <AreaChart data={scoreTrend} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="forecastGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                <XAxis dataKey="analysis" tick={{ fontSize: 10, fill: "#71717a" }} axisLine={{ stroke: "#27272a" }} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: "#71717a" }} axisLine={{ stroke: "#27272a" }} />
+                <Tooltip content={<CustomTooltip />} />
+                <Area type="monotone" dataKey="score" name="Health Score" stroke="#22c55e" strokeWidth={2} fill="url(#forecastGrad)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex items-center justify-center h-[280px] text-zinc-600 text-xs">No trend data yet</div>
+          )}
+        </div>
+
+
+
+        {/* Risk Breakdown */}
+        <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-5">
+          <h3 className="text-sm font-semibold text-zinc-200 uppercase tracking-wider mb-4">Risk Distribution</h3>
+          {riskBreakdown.length > 0 ? (
+            <div className="flex items-center gap-8">
+              <ResponsiveContainer width={160} height={160}>
+                <PieChart>
+                  <Pie 
+                    data={riskBreakdown} 
+                    dataKey="value" 
+                    cx="50%" 
+                    cy="50%" 
+                    innerRadius={45} 
+                    outerRadius={70} 
+                    strokeWidth={0}
+                  >
+                    {riskBreakdown.map((entry, i) => (
+                      <Cell key={i} fill={entry.color} />
+                    ))}
+                  </Pie>
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="space-y-2.5 flex-1">
+                {riskBreakdown.map((r) => (
+                  <div key={r.reason} className="flex items-center gap-3">
+                    <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: r.color }} />
+                    <span className="text-xs text-zinc-400 flex-1">{r.reason}</span>
+                    <span className="text-xs font-mono text-zinc-300">{r.value}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="flex items-center justify-center h-[160px] text-zinc-600 text-xs">No data yet</div>
+          )}
         </div>
       </div>
     </div>

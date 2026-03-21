@@ -1,18 +1,9 @@
 import { ClerkProvider } from "@clerk/nextjs";
 import { dark } from "@clerk/themes";
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import "./globals.css";
-
-const inter = Inter({
-  variable: "--font-inter",
-  subsets: ["latin"],
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  variable: "--font-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "Oakwell — Autonomous Revenue Defense",
@@ -35,7 +26,7 @@ export default function RootLayout({
         variables: { colorPrimary: "#3b82f6" },
       }}
     >
-      <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`}>
+      <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
         <body className="font-sans antialiased">{children}</body>
       </html>
     </ClerkProvider>

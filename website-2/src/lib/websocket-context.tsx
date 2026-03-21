@@ -1,5 +1,7 @@
 "use client";
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
+import { useDemoMode } from "./demo-context";
+import { DEMO_ALERTS } from "./demo-data";
 
 // Types for the real-time system
 export type AgentStep = 
@@ -56,8 +58,8 @@ export function useWebSocket() {
   return ctx;
 }
 
-// Simulates WebSocket behavior for demo — swap with real socket.io later
 export function WebSocketProvider({ children }: { children: React.ReactNode }) {
+  const { isDemo } = useDemoMode();
   const [connected, setConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "disconnected" | "reconnecting">("connecting");
   const [liveOperations, setLiveOperations] = useState<LiveOperation[]>([]);
@@ -65,51 +67,30 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const operationTimers = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
-  // Simulate connection on mount
+  // Connection + alerts
   useEffect(() => {
+    // Quick "connect" animation
     const t = setTimeout(() => {
       setConnected(true);
       setConnectionStatus("connected");
       setLastSync(new Date());
-    }, 1200);
+    }, isDemo ? 600 : 1200);
 
-    // Start background heartbeat
-    const heartbeat = setInterval(() => {
-      setLastSync(new Date());
-    }, 5000);
+    // Heartbeat
+    const heartbeat = setInterval(() => setLastSync(new Date()), 5000);
 
-    // Simulate periodic alerts
-    const alertInterval = setInterval(() => {
-      if (Math.random() > 0.7) {
-        const alertTypes: RealtimeAlert["type"][] = ["pricing", "feature", "mention", "risk", "champion_change"];
-        const titles: Record<string, string[]> = {
-          pricing: ["Gong updated Enterprise pricing", "Clari added new tier", "Outreach running 20% promo"],
-          feature: ["Clari shipped RevAI v2", "Gong launched Copilot beta", "Chorus added API endpoints"],
-          mention: ["Competitor mentioned on Stripe call", "Clari referenced in Vercel email thread"],
-          risk: ["Deal velocity slowing on Anthropic", "No activity on Linear for 5 days"],
-          champion_change: ["Jake Morrison left Vercel", "New VP Sales at Stripe"],
-        };
-        const type = alertTypes[Math.floor(Math.random() * alertTypes.length)];
-        const titleList = titles[type];
-        const newAlert: RealtimeAlert = {
-          id: `alert-${Date.now()}`,
-          type,
-          severity: (["critical", "high", "medium", "low"] as const)[Math.floor(Math.random() * 4)],
-          title: titleList[Math.floor(Math.random() * titleList.length)],
-          timestamp: new Date(),
-          read: false,
-        };
-        setRealtimeAlerts(prev => [newAlert, ...prev].slice(0, 50));
-      }
-    }, 15000);
+    // DEMO MODE: Load rich pre-built alerts
+    if (isDemo) {
+      setRealtimeAlerts(DEMO_ALERTS as RealtimeAlert[]);
+    }
+    // PRODUCTION MODE: No fake alerts — real alerts will come from SSE/webhooks later
 
     return () => {
       clearTimeout(t);
       clearInterval(heartbeat);
-      clearInterval(alertInterval);
       operationTimers.current.forEach(t => clearTimeout(t));
     };
-  }, []);
+  }, [isDemo]);
 
   const simulateOperation = useCallback((op: LiveOperation) => {
     setLiveOperations(prev => [op, ...prev]);
@@ -120,7 +101,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       { step: "extracting_claims", progress: 45, message: "Extracting pricing & feature claims...", delay: 3000 },
       { step: "verifying_claims", progress: 70, message: "Cross-referencing with Vision AI...", delay: 2500 },
       { step: "generating_strategy", progress: 90, message: "Generating strategic recommendations...", delay: 2000 },
-      { step: "complete", progress: 100, message: "✓ Analysis complete", delay: 1000 },
+      { step: "complete", progress: 100, message: "\u2713 Analysis complete", delay: 1000 },
     ];
 
     if (op.type === "analysis") {
@@ -145,7 +126,6 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       operationTimers.current.set(`${op.id}-${step}`, timer);
     });
 
-    // Auto-remove after complete
     const removeTimer = setTimeout(() => {
       setLiveOperations(prev => prev.filter(o => o.id !== op.id));
     }, totalDelay + 5000);

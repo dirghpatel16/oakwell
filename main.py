@@ -1504,7 +1504,7 @@ async def analyze_deal(
     background_tasks: BackgroundTasks,
 ) -> Dict[str, str]:
     """Enqueue deal analysis. Returns job_id immediately; poll GET /deal-status/{job_id} for results."""
-    api_key = request.headers.get("X-Google-API-Key") or None
+    api_key = None  # Model A: server-side GOOGLE_API_KEY env var
     job_id = str(uuid.uuid4())
     jobs[job_id] = {"status": "pending", "result": None, "error": None, "progress_message": "Queued…"}
     slack_url = req.slack_webhook_url or request.headers.get("X-Slack-Webhook-URL") or None
@@ -1536,7 +1536,7 @@ async def analyze_deal(
 async def generate_email(req: GenerateEmailRequest, request: Request) -> Dict[str, str]:
     """Generate a follow-up email from either a job_id or provided deal results."""
     logger.info(f"Email request: job_id={req.job_id}, has_deal_results={bool(req.deal_results)}")
-    api_key = request.headers.get("X-Google-API-Key") or None
+    api_key = None  # Model A: server-side GOOGLE_API_KEY env var
     deal_results: Optional[Dict[str, Any]] = None
     if req.job_id:
         job = jobs.get(req.job_id)
@@ -1580,7 +1580,7 @@ async def live_snippet(req: LiveSnippetRequest, request: Request) -> LiveSnippet
     3. If a pricing claim is found AND urgency >= threshold, autonomously
        fires tools.verify_claim_with_vision in the background.
     """
-    api_key = request.headers.get("X-Google-API-Key") or None
+    api_key = None  # Model A: server-side GOOGLE_API_KEY env var
     snippet_text = req.snippet.strip()
     if not snippet_text:
         return LiveSnippetResponse(status="skipped", reason="empty snippet")

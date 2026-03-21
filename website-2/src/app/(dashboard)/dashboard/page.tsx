@@ -1,5 +1,5 @@
 "use client";
-import React from "react";
+import React, { useMemo } from "react";
 import { 
   ArrowUpRight, 
   ArrowDownRight, 
@@ -9,15 +9,52 @@ import {
   Activity, 
   Crosshair,
   Loader2,
-  Play
+  Play,
+  AlertCircle,
+  RefreshCw
 } from "lucide-react";
 import { useWebSocket } from "@/lib/websocket-context";
 import { ConnectionStatus } from "@/components/live-activity";
+import { useMemory, useWinningPatterns, useSentinelStatus } from "@/lib/hooks";
 
 export default function WarRoomPage() {
   const { triggerScan, triggerDealAnalysis, liveOperations, connected, lastSync } = useWebSocket();
+  const { data: memory, loading: memLoading, error: memError, refresh: refreshMemory } = useMemory();
+  const { data: patterns } = useWinningPatterns();
+  const { data: sentinel } = useSentinelStatus();
 
   const timeSince = lastSync ? Math.floor((Date.now() - lastSync.getTime()) / 1000) : null;
+
+  // Derive metrics from real data
+  const metrics = useMemo(() => {
+    if (!memory) return null;
+    const entries = Object.entries(memory);
+    const scores = entries.map(([, e]) => e.deal_health_score).filter(Boolean);
+    const avgScore = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+    const totalAnalyses = entries.reduce((s, [, e]) => s + (e.analysis_count || 0), 0);
+    const riskyDeals = entries.filter(([, e]) => e.deal_health_score < 50);
+    return { avgScore, totalAnalyses, competitorCount: entries.length, riskyDeals, entries };
+  }, [memory]);
+
+  // Derive feed items from memory timelines
+  const feedItems = useMemo(() => {
+    if (!memory) return [];
+    const items: { time: string; title: string; desc: string; severity: "high" | "medium" | "low"; url: string }[] = [];
+    Object.entries(memory).forEach(([url, entry]) => {
+      const name = url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+      if (entry.timeline && entry.timeline.length > 0) {
+        const latest = entry.timeline[entry.timeline.length - 1];
+        items.push({
+          time: latest.ts ? new Date(latest.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Recent",
+          title: `${name} — Score ${latest.score}/100`,
+          desc: latest.top_clash || entry.clashes_detected?.slice(0, 120) || "Monitoring active",
+          severity: latest.score < 40 ? "high" : latest.score < 65 ? "medium" : "low",
+          url,
+        });
+      }
+    });
+    return items.sort((a, b) => (a.severity === "high" ? -1 : b.severity === "high" ? 1 : 0)).slice(0, 10);
+  }, [memory]);
 
   return (
     <div className="p-6 md:p-8 max-w-[1600px] mx-auto space-y-8">
@@ -30,6 +67,15 @@ export default function WarRoomPage() {
         </div>
         
         <div className="flex items-center gap-3">
+          {/* Refresh button */}
+          <button 
+            onClick={refreshMemory}
+            disabled={memLoading}
+            className="flex items-center gap-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 px-3 py-1.5 rounded text-zinc-300 hover:text-white hover:border-zinc-700 disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw className={`w-3 h-3 ${memLoading ? "animate-spin" : ""}`} /> Refresh
+          </button>
+
           {/* Live scan trigger */}
           <button 
             onClick={() => triggerScan("All Competitors")}
@@ -58,33 +104,50 @@ export default function WarRoomPage() {
         </div>
       </div>
 
-      {/* QUADRANT 1: The Macro Metrics (Clari style) */}
+      {/* Error Banner */}
+      {memError && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-3 flex items-center gap-3 text-sm text-red-400">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>Backend connection issue: {memError}. Showing cached data if available.</span>
+          <button onClick={refreshMemory} className="ml-auto text-xs underline hover:text-red-300">Retry</button>
+        </div>
+      )}
+
+      {/* Loading State */}
+      {memLoading && !memory && (
+        <div className="flex items-center justify-center py-12 gap-3 text-zinc-500">
+          <Loader2 className="w-5 h-5 animate-spin" />
+          <span className="text-sm">Connecting to Oakwell Engine...</span>
+        </div>
+      )}
+
+      {/* QUADRANT 1: The Macro Metrics — now from real data */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <MetricCard 
-          title="Pipeline at Risk" 
-          value="$1.2M" 
-          trend="-4%" 
+          title="Competitors Tracked" 
+          value={metrics ? metrics.competitorCount.toString() : "—"} 
+          trend={sentinel ? `${sentinel.watched_urls} URLs` : ""} 
+          trendType="neutral" 
+          subtitle="In Neural Memory Bank" 
+        />
+        <MetricCard 
+          title="Win Rate" 
+          value={patterns ? `${Math.round(patterns.win_rate * 100)}%` : "—"} 
+          trend={patterns && patterns.total_outcomes > 0 ? `${patterns.total_outcomes} outcomes` : ""} 
           trendType="good" 
-          subtitle="Competitor mentions up" 
+          subtitle={patterns ? `$${Math.round(patterns.deal_value_won / 1000)}K won` : "No data yet"} 
         />
         <MetricCard 
-          title="Win Rate (vs Competitors)" 
-          value="42%" 
-          trend="+8%" 
-          trendType="good" 
-          subtitle="Gong is primary threat" 
+          title="Avg Health Score" 
+          value={metrics ? `${metrics.avgScore}/100` : "—"} 
+          trend={metrics && metrics.avgScore >= 60 ? "Healthy" : metrics && metrics.avgScore > 0 ? "At Risk" : ""} 
+          trendType={metrics && metrics.avgScore >= 60 ? "good" : "bad"} 
+          subtitle="Across all deals" 
         />
         <MetricCard 
-          title="Avg Deal Cycle" 
-          value="45 Days" 
-          trend="+2 Days" 
-          trendType="bad" 
-          subtitle="Slowing in EMEA" 
-        />
-        <MetricCard 
-          title="Active Talk Tracks" 
-          value="14" 
-          trend="+3" 
+          title="Total Analyses" 
+          value={metrics ? metrics.totalAnalyses.toString() : "—"} 
+          trend={patterns ? `${patterns.winning_strategies.length} playbooks` : ""} 
           trendType="neutral" 
           subtitle="Agents deployed" 
         />
@@ -92,55 +155,54 @@ export default function WarRoomPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        {/* QUADRANT 2: Active Deal Risk (Left Column - 2 spans) */}
+        {/* QUADRANT 2: Active Deal Risk (Left Column - 2 spans) — from memory */}
         <div className="lg:col-span-2 space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-zinc-200 uppercase tracking-wider">Critical Deal Exceptions</h2>
-            <button className="text-xs text-blue-400 hover:text-blue-300 transition-colors">View All Deals →</button>
+            <h2 className="text-sm font-semibold text-zinc-200 uppercase tracking-wider">Deal Intelligence</h2>
+            <a href="/dashboard/deals" className="text-xs text-blue-400 hover:text-blue-300 transition-colors">View All Deals →</a>
           </div>
           
           <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg overflow-hidden">
-            {/* Dense Data Table */}
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-zinc-800 bg-zinc-900/50">
-                  <th className="py-3 px-4 text-[10px] font-medium text-zinc-500 uppercase tracking-wider">Account</th>
-                  <th className="py-3 px-4 text-[10px] font-medium text-zinc-500 uppercase tracking-wider">Amount</th>
-                  <th className="py-3 px-4 text-[10px] font-medium text-zinc-500 uppercase tracking-wider">Stage</th>
+                  <th className="py-3 px-4 text-[10px] font-medium text-zinc-500 uppercase tracking-wider">Competitor</th>
+                  <th className="py-3 px-4 text-[10px] font-medium text-zinc-500 uppercase tracking-wider">Health</th>
+                  <th className="py-3 px-4 text-[10px] font-medium text-zinc-500 uppercase tracking-wider">Analyses</th>
                   <th className="py-3 px-4 text-[10px] font-medium text-zinc-500 uppercase tracking-wider">AI Risk Factor</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/50">
-                <TableRow 
-                  account="Stripe" 
-                  rep="Sarah J."
-                  amount="$150,000" 
-                  stage="Commit" 
-                  risk="High" 
-                  riskReason="Competitor 'Clari' mentioned 4x on last call. Pricing objection unhandled." 
-                />
-                <TableRow 
-                  account="Vercel" 
-                  rep="Mike T."
-                  amount="$85,000" 
-                  stage="Best Case" 
-                  risk="Medium" 
-                  riskReason="Champion left company. No executive alignment." 
-                />
-                <TableRow 
-                  account="Anthropic" 
-                  rep="Dirgh P."
-                  amount="$220,000" 
-                  stage="Negotiation" 
-                  risk="Low" 
-                  riskReason="Security review passed. Awaiting legal redlines." 
-                />
+                {metrics && metrics.entries.length > 0 ? (
+                  metrics.entries.slice(0, 8).map(([url, entry]) => {
+                    const name = url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+                    const score = entry.deal_health_score || 0;
+                    const risk = score < 40 ? "High" : score < 65 ? "Medium" : "Low";
+                    return (
+                      <TableRow 
+                        key={url}
+                        account={name} 
+                        rep={`${entry.analysis_count || 0} runs`}
+                        amount={`${score}/100`} 
+                        stage={entry.last_analysis_ts ? new Date(entry.last_analysis_ts).toLocaleDateString() : "—"} 
+                        risk={risk} 
+                        riskReason={entry.clashes_detected?.slice(0, 150) || "No issues detected"} 
+                      />
+                    );
+                  })
+                ) : !memLoading ? (
+                  <tr>
+                    <td colSpan={4} className="py-8 text-center text-sm text-zinc-600">
+                      No deals analyzed yet. Go to <a href="/dashboard/deals" className="text-blue-400 underline">Deal Desk</a> to run your first analysis.
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
         </div>
 
-        {/* QUADRANT 3: Market Sentinel Live Feed (Right Column) */}
+        {/* QUADRANT 3: Market Sentinel Live Feed (Right Column) — from real timelines */}
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-zinc-200 uppercase tracking-wider flex items-center gap-2">
@@ -150,28 +212,20 @@ export default function WarRoomPage() {
           </div>
           
           <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4 space-y-4 h-[320px] overflow-y-auto">
-            {/* Live Feed Items (Looks like terminal logs) */}
-            <FeedItem 
-              time="10:42 AM" 
-              type="pricing_change" 
-              title="Gong updated Pricing Page" 
-              desc="Detected new tier 'Enterprise Plus' at $140/user." 
-              severity="high" 
-            />
-            <FeedItem 
-              time="09:15 AM" 
-              type="feature_launch" 
-              title="Clari shipped 'Copilot'" 
-              desc="New generative AI feature detected on homepage." 
-              severity="medium" 
-            />
-            <FeedItem 
-              time="Yesterday" 
-              type="sentiment" 
-              title="Reddit: Competitor Churn" 
-              desc="3 posts in r/sales complaining about Chorus API limits." 
-              severity="low" 
-            />
+            {feedItems.length > 0 ? feedItems.map((item, i) => (
+              <FeedItem 
+                key={i}
+                time={item.time} 
+                title={item.title} 
+                desc={item.desc} 
+                severity={item.severity} 
+              />
+            )) : !memLoading ? (
+              <div className="flex flex-col items-center justify-center h-full text-center text-zinc-600 text-xs space-y-2">
+                <Activity className="w-6 h-6 text-zinc-700" />
+                <p>No sentinel data yet. Analyze a deal to start building intelligence.</p>
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -240,7 +294,7 @@ function TableRow({ account, rep, amount, stage, risk, riskReason }: any) {
   );
 }
 
-function FeedItem({ time, title, desc, severity }: any) {
+function FeedItem({ time, title, desc, severity }: { time: string; title: string; desc: string; severity: string }) {
   return (
     <div className="flex gap-3 items-start border-l-2 pl-3 pb-4 border-zinc-800 last:border-transparent last:pb-0 relative">
       <div className={`absolute -left-[5px] top-1.5 w-2 h-2 rounded-full border border-[#0a0a0a] ${

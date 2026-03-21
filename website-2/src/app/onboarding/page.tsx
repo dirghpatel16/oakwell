@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { 
   ArrowRight, 
   ArrowLeft,
@@ -10,11 +10,11 @@ import {
   MessageSquare,
   Shield,
   Loader2,
-  ExternalLink,
   Plus,
   X,
   Zap
 } from "lucide-react";
+import * as api from "@/lib/api";
 
 type OnboardingStep = 1 | 2 | 3 | 4 | 5;
 
@@ -37,9 +37,11 @@ export default function OnboardingPage() {
   const [isScanning, setIsScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
   const [scanStep, setScanStep] = useState("");
+  const [scanLogs, setScanLogs] = useState<{ text: string; color: string; bold?: boolean }[]>([]);
 
   const totalSteps = 5;
   const progress = (step / totalSteps) * 100;
+  const abortRef = useRef(false);
 
   const addCompetitor = () => {
     if (competitors.length < 5) {
@@ -57,29 +59,110 @@ export default function OnboardingPage() {
     setCompetitors(updated);
   };
 
-  const startInitialScan = () => {
+  const addLog = (text: string, color: string, bold?: boolean) => {
+    setScanLogs(prev => [...prev, { text, color, bold }]);
+  };
+
+  const startInitialScan = async () => {
     setIsScanning(true);
-    const steps = [
-      { progress: 10, label: "Connecting to CRM..." },
-      { progress: 25, label: "Importing active deals..." },
-      { progress: 40, label: "Scanning competitor websites..." },
-      { progress: 55, label: "Extracting pricing & features..." },
-      { progress: 70, label: "Analyzing with Vision AI..." },
-      { progress: 85, label: "Generating initial risk scores..." },
-      { progress: 95, label: "Building your War Room..." },
-      { progress: 100, label: "✓ Setup complete!" },
-    ];
-    
-    let i = 0;
-    const interval = setInterval(() => {
-      if (i < steps.length) {
-        setScanProgress(steps[i].progress);
-        setScanStep(steps[i].label);
-        i++;
-      } else {
-        clearInterval(interval);
+    abortRef.current = false;
+    setScanLogs([]);
+    setScanProgress(0);
+
+    // 1. Health check
+    setScanStep("Checking Oakwell backend...");
+    addLog("[system] Checking Oakwell backend health...", "text-zinc-500");
+    try {
+      await api.getHealth();
+      addLog("[system] ✓ Backend online", "text-green-400");
+      setScanProgress(10);
+    } catch {
+      addLog("[system] ✗ Backend unreachable — retrying...", "text-red-400");
+      try {
+        await api.getHealth();
+        addLog("[system] ✓ Backend online (retry)", "text-green-400");
+      } catch {
+        addLog("[system] ✗ Backend offline. Please try again later.", "text-red-400", true);
+        setScanStep("Backend offline");
+        return;
       }
-    }, 1500);
+    }
+
+    // 2. Analyze each competitor
+    const validCompetitors = competitors.filter(c => c.domain.trim());
+    if (validCompetitors.length === 0) {
+      addLog("[system] No competitors with domains entered — skipping analysis", "text-amber-400");
+      setScanProgress(100);
+      setScanStep("✓ Setup complete!");
+      addLog("[system] ✓ Oakwell is ready. Enter your War Room.", "text-green-500", true);
+      return;
+    }
+
+    const perCompetitor = 80 / validCompetitors.length;
+    let completed = 0;
+
+    for (const comp of validCompetitors) {
+      if (abortRef.current) break;
+      const domain = comp.domain.trim();
+      const url = domain.startsWith("http") ? domain : `https://${domain}`;
+      
+      setScanStep(`Analyzing ${comp.name || domain}...`);
+      addLog(`[sentinel] Scanning ${url}...`, "text-blue-400");
+
+      try {
+        // Submit analysis job
+        const job = await api.analyzeDeal({
+          transcript: `Initial onboarding scan for ${comp.name || domain}`,
+          competitor_url: url,
+          competitor_name: comp.name || undefined,
+          your_product: companyName || undefined,
+        });
+        addLog(`[sentinel] Job submitted: ${job.job_id.slice(0, 8)}...`, "text-zinc-500");
+        
+        // Poll for completion
+        let attempts = 0;
+        const maxAttempts = 60; // 3 minutes max
+        while (attempts < maxAttempts && !abortRef.current) {
+          await new Promise(r => setTimeout(r, 3000));
+          attempts++;
+          try {
+            const status = await api.getDealStatus(job.job_id);
+            if (status.progress_message) {
+              setScanStep(status.progress_message);
+            }
+            if (status.status === "completed") {
+              const score = status.result?.deal_health_score || "?";
+              addLog(`[engine] ✓ ${comp.name || domain} — Health Score: ${score}/100`, "text-green-400");
+              break;
+            } else if (status.status === "failed") {
+              addLog(`[engine] ✗ ${comp.name || domain} — analysis failed: ${status.error || "unknown"}`, "text-red-400");
+              break;
+            }
+          } catch {
+            // polling error, continue
+          }
+        }
+        if (attempts >= maxAttempts) {
+          addLog(`[engine] ⚠ ${comp.name || domain} — timed out (still processing)`, "text-amber-400");
+        }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Unknown error";
+        addLog(`[engine] ✗ ${comp.name || domain} — ${msg}`, "text-red-400");
+      }
+
+      completed++;
+      setScanProgress(10 + Math.round(completed * perCompetitor));
+    }
+
+    // 3. Finish
+    setScanProgress(95);
+    setScanStep("Finalizing...");
+    addLog("[risk] Generating risk scores and alerts...", "text-purple-400");
+    await new Promise(r => setTimeout(r, 1000));
+    
+    setScanProgress(100);
+    setScanStep("✓ Setup complete!");
+    addLog("[system] ✓ Oakwell is now protecting your revenue.", "text-green-500", true);
   };
 
   return (
@@ -367,21 +450,11 @@ export default function OnboardingPage() {
 
                   {/* Terminal-style log */}
                   <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4 font-mono text-[11px] space-y-1.5 max-h-[200px] overflow-y-auto">
-                    {scanProgress >= 10 && <LogLine text={`[sentinel] Connecting to ${crmSelected || "CRM"}...`} color="text-zinc-500" />}
-                    {scanProgress >= 25 && <LogLine text="[sentinel] Found 14 active deals in pipeline" color="text-green-400" />}
-                    {scanProgress >= 40 && (
-                      <>
-                        {competitors.filter(c => c.name).map((c, i) => (
-                          <LogLine key={i} text={`[sentinel] Scanning ${c.domain || c.name}...`} color="text-blue-400" />
-                        ))}
-                      </>
-                    )}
-                    {scanProgress >= 55 && <LogLine text="[vision] Extracting pricing tables with GPT-4 Vision" color="text-purple-400" />}
-                    {scanProgress >= 70 && <LogLine text="[vision] Cross-referencing claims across 47 pages" color="text-purple-400" />}
-                    {scanProgress >= 85 && <LogLine text="[risk] Scored 14 deals — 3 flagged HIGH risk" color="text-amber-400" />}
-                    {scanProgress >= 95 && <LogLine text="[engine] War Room populated. 7 alerts generated." color="text-green-400" />}
-                    {scanProgress >= 100 && (
-                      <LogLine text="[system] ✓ Oakwell is now protecting your revenue." color="text-green-500" bold />
+                    {scanLogs.map((log, i) => (
+                      <LogLine key={i} text={log.text} color={log.color} bold={log.bold} />
+                    ))}
+                    {scanProgress < 100 && scanProgress > 0 && (
+                      <p className="text-zinc-600 animate-pulse">▋</p>
                     )}
                   </div>
 
