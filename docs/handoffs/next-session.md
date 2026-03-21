@@ -1,20 +1,19 @@
 # Next Session
 
 ## Read first
-1. `AGENTS.md`
-2. `docs/handoffs/current-state.md`
-3. `website-2/AGENTS.md` (Frontend context)
-4. `start.sh` (Backend port configuration)
+1. `AGENTS.md` (System overview)
+2. `docs/handoffs/current-state.md` (Architecture state)
+3. `start.sh` & `main.py` (Deployment & API contract)
 
 ## Start here
-- `docs/handoffs/current-state.md` (To see the dual-dashboard status)
-- `website-2/src/lib/demo-data.ts` (To understand the mock data engine)
-- `website-2/src/lib/websocket-context.tsx` (To see the realtime alert simulation logic)
-- `website-2/src/lib/demo-context.tsx` (To understand how the UI locks into demo/prod)
+- `docs/handoffs/current-state.md` (To see the backend deployment status)
+- `main.py` (To see the updated API endpoints missing `X-Google-API-Key`)
+- `start.sh` (To confirm the 8080/8501 port swap for Cloud Run)
 
 ## Immediate task
-1. Guide the user through the **deployment of the FastAPI backend to Google Cloud Run**. All local code changes (including the `start.sh` port fix) have already been pushed to GitHub. A redeploy will resolve the current "Failed to fetch" backend connection error on the `/dashboard` routes.
-2. Wire up the production `websocket-context.tsx` to handle real Server-Sent Events (SSE) from the live backend, replacing the simulated `setInterval` logic.
+1. Guide the user through the **deployment of the FastAPI backend to Google Cloud Run**. The container entrypoint (`start.sh`) now exposes FastAPI on `8080` (expected by GCP) instead of Streamlit. Redeploying will resolve the "Failed to fetch" error on the `/dashboard`.
+2. Ensure the Cloud Run environment has a valid `GOOGLE_API_KEY` set as an environment variable, since we shifted to Model A billing (absorbing costs) and removed BYOK headers.
+3. Once the API is live, wire up `websocket-context.tsx` to handle real Server-Sent Events (SSE) from the backend instead of simulated intervals.
 
 ## Watch out for
 - **Route Prefixing**: Links in the sidebar/shell must use the `basePath` prop from `DashboardShell` to avoid crossing between `/dashboard` and `/demo`.

@@ -5,6 +5,8 @@
 Implemented a dual-dashboard architecture with a high-fidelity investor demo mode and a live customer production mode. Fixed backend port mismatch issues and polished the UI to a Vercel-like aesthetic.
 
 ### Files touched
+- `main.py`: Updated `/analyze-deal`, `/generate-email`, and `/live-snippet` endpoints to drop `X-Google-API-Key` checks.
+- `start.sh`: Swapped container entrypoint ports; FastAPI is now primary on 8080.
 - `website-2/src/app/(demo)/demo/*`: Created 8 re-export routes.
 - `website-2/src/components/dashboard-shell.tsx`: Created shared layout.
 - `website-2/src/lib/demo-data.ts`: Created mock engine for investor demos.
@@ -12,8 +14,6 @@ Implemented a dual-dashboard architecture with a high-fidelity investor demo mod
 - `website-2/src/lib/hooks.ts`: Updated all data hooks to be demo-aware.
 - `website-2/src/lib/websocket-context.tsx`: Updated to use `DEMO_ALERTS`.
 - `website-2/src/app/layout.tsx` & `globals.css`: Integrated **Geist Sans/Mono** fonts.
-- `start.sh`: Fixed FastAPI port to 8080 and Streamlit to 8501.
-- `main.py`: Removed `X-Google-API-Key` header requirement (Model A billing).
 
 ### Why
 The user needed a way to showcase Oakwell to investors with rich sample data without exposing live customer data or seeing empty dashboards. The backend port fix was required to resolve production "Failed to fetch" errors.
