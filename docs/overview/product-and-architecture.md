@@ -1,6 +1,12 @@
-# OAKWELL — Technical Documentation & Architecture Guide
+# OAKWELL — Product & Architecture Overview
 
-> **Status:** MVP Live — Backend on GCP Cloud Run, Frontend on Vercel
+> **⚠️ NOTE: High-Level Overview Only**
+> This document provides a conceptual understanding of Oakwell for onboarding, product narrative, and investor context. It is **not** the operational source of truth. 
+> 
+> For active engineering, immediate next steps, and live configuration, refer to:
+> 1. `AGENTS.md` (System Rules & Handoffs)
+> 2. `docs/handoffs/current-state.md` (Current Engineering Status)
+> 3. `docs/handoffs/next-session.md` (Immediate Tasks)
 
 ---
 
@@ -113,7 +119,7 @@ Think of it as a **war room for sales reps** — it:
 │                                                               │
 │  ┌──────────────────┐    ┌───────────────────────────────┐   │
 │  │  Streamlit UI    │    │  FastAPI Backend               │   │
-│  │  (Port 8080)     │    │  (Port 8000)                   │   │
+│  │  (Port 8501)     │    │  (Port 8080)                   │   │
 │  │                  │◄──►│                                │   │
 │  │  • War Room      │    │  POST /analyze-deal            │   │
 │  │  • Sentinel      │    │  POST /live-snippet            │   │
@@ -145,7 +151,7 @@ Think of it as a **war room for sales reps** — it:
 ```
 
 **Two deployment targets:**
-1. **Cloud Run (GCP)** — Runs both the FastAPI backend (port 8000) and the Streamlit demo UI (port 8080) in one container. This is the **AI brain**.
+1. **Cloud Run (GCP)** — Runs both the FastAPI backend (port 8080) and the Streamlit demo UI (port 8501) in one container. This is the **AI brain**. (Note: Ports are actively being configured via `start.sh`; see `current-state.md` for live status.)
 2. **Vercel** — Runs the production Next.js dashboard at `oakwll.com`. This is the **customer-facing product**.
 
 ---
@@ -177,6 +183,7 @@ Think of it as a **war room for sales reps** — it:
 | **Clerk v5** | Authentication & user management | Google SSO, dark theme, org management, middleware protection |
 | **Recharts** | Data visualization | Revenue charts, forecast graphs, market share donut |
 | **Framer Motion** | Animations | Landing page scroll animations, route transitions |
+| **Geist Sans/Mono** | Typography | Professional, terminal-inspired Vercel aesthetic |
 | **Lucide React** | Icon library | Consistent iconography across all screens |
 
 ### Infrastructure
@@ -203,7 +210,7 @@ oakwell/                          ← Root repository (GitHub: dirghpatel16/oakw
 ├── __init__.py                   ← Python package marker
 │
 ├── Dockerfile                    ← Container config for Cloud Run
-├── start.sh                      ← Entrypoint: runs FastAPI (8000) + Streamlit (8080)
+├── start.sh                      ← Entrypoint: runs FastAPI (8080) + Streamlit (8501)
 ├── requirements.txt              ← Python dependencies
 │
 ├── Oakwell/                      ← Agent YAML configs (Google ADK Agent Builder format)
@@ -235,32 +242,32 @@ oakwell/                          ← Root repository (GitHub: dirghpatel16/oakw
 │       ├── app/
 │       │   ├── layout.tsx         ← Root layout (ClerkProvider, fonts, metadata)
 │       │   ├── page.tsx           ← Landing page (oakwll.com — marketing)
-│       │   ├── globals.css        ← Terminal theme (20+ CSS vars, 6 animations)
+│       │   ├── globals.css        ← Terminal theme (20+ CSS vars, Geist font setup)
 │       │   │
 │       │   ├── (auth)/            ← Route group: authentication
 │       │   │   ├── sign-in/       ← Clerk Sign In page
 │       │   │   └── sign-up/       ← Clerk Sign Up page
 │       │   │
-│       │   ├── (dashboard)/       ← Route group: protected dashboard
-│       │   │   ├── layout.tsx     ← Dashboard shell (sidebar, header, WebSocket)
-│       │   │   └── dashboard/
-│       │   │       ├── page.tsx           ← War Room (KPIs, deal table, sentinel feed)
-│       │   │       ├── deals/page.tsx     ← Deal Desk (split-pane, transcript, coaching)
-│       │   │       ├── targets/page.tsx   ← Market Sentinel (competitor monitoring)
-│       │   │       ├── alerts/page.tsx    ← Threat Intel (filterable alert feed)
-│       │   │       ├── forecast/page.tsx  ← Revenue Forecast (4 Recharts visualizations)
-│       │   │       ├── settings/page.tsx  ← Settings (profile, integrations, Slack, API)
-│       │   │       ├── executive/page.tsx ← Executive Portal (ARR, deal velocity, market share)
-│       │   │       └── sidekick/page.tsx  ← Live Sidekick (real-time call coaching)
+│       │   ├── (dashboard)/       ← Route group: protected customer dashboard
+│       │   │   ├── layout.tsx     ← Wraps DemoModeProvider (false) + Clerk UserButton
+│       │   │   └── dashboard/     ← Production logic pages (deals, alerts, targets, etc.)
+│       │   │
+│       │   ├── (demo)/            ← Route group: public investor demo dashboard
+│       │   │   ├── layout.tsx     ← Wraps DemoModeProvider (true) + Demo Banner
+│       │   │   └── demo/          ← Page re-exports sharing identical UI with mock data
 │       │   │
 │       │   └── onboarding/
-│       │       └── page.tsx       ← 5-step onboarding wizard (company → CRM → competitors → Slack → deploy)
+│       │       └── page.tsx       ← 5-step onboarding wizard
 │       │
 │       ├── lib/
-│       │   ├── utils.ts           ← Utility functions (cn, formatCurrency, timeAgo, severityColors)
-│       │   └── websocket-context.tsx ← WebSocket simulation (connection, scan triggers, alerts)
+│       │   ├── demo-data.ts       ← Rich mock data engine for 6 competitors
+│       │   ├── demo-context.tsx   ← Provider managing the `forced` demo lock
+│       │   ├── hooks.ts           ← Demo-aware data fetching hooks
+│       │   ├── utils.ts           ← Utility functions (cn, formatCurrency, severityColors)
+│       │   └── websocket-context.tsx ← Realtime/simulated alert provider
 │       │
 │       └── components/
+│           ├── dashboard-shell.tsx ← Shared sidebar and header shell
 │           └── live-activity.tsx   ← LiveActivityPanel, ConnectionStatus, NotificationBell
 │
 └── .env                           ← Google API keys (NOT in git)
@@ -270,9 +277,9 @@ oakwell/                          ← Root repository (GitHub: dirghpatel16/oakw
 
 ## 7. Backend Deep-Dive
 
-### `main.py` — FastAPI Backend (1,969 lines)
+### `main.py` — FastAPI Backend (~2,000 lines)
 
-This is the **brain of Oakwell**. It's a FastAPI app that runs on port 8000.
+This is the **brain of Oakwell**. It's a FastAPI app designed to run on port 8080 via Cloud Run.
 
 **Key Concepts:**
 
@@ -396,9 +403,9 @@ BattleCardPipeline (SequentialAgent)
 
 ---
 
-### `app.py` — Streamlit Demo UI (1,365 lines)
+### `app.py` — Streamlit Demo UI (~1,300 lines)
 
-The original prototype dashboard built with Streamlit. Runs on port 8080 inside the Cloud Run container.
+The original prototype dashboard built with Streamlit. Runs internally on port 8501 inside the Cloud Run container.
 
 **3 Tabs:**
 1. **War Room: Deal Analysis** — Paste transcript, enter competitor URL, select deal stage, run full analysis. Shows live progress ticker, deal health score, adversarial talk-track, clashes, visual proof screenshots, market drift alerts, and email generation.
@@ -439,22 +446,20 @@ Dashboard loads with sidebar, header, WebSocket connection
 - Must be added to Vercel Environment Variables for production
 - Dark theme with custom blue accent via `@clerk/themes`
 
-#### 8.2 Dashboard Pages (13 Routes)
+#### 8.2 Dual Dashboard Architecture
 
-| Route | Page | Description |
-|-------|------|-------------|
-| `/` | Landing Page | Marketing site with scroll animations, terminal mock, feature sections |
-| `/sign-in` | Sign In | Clerk component, dark background |
-| `/sign-up` | Sign Up | Clerk component, dark background |
-| `/onboarding` | Onboarding Wizard | 5-step setup: company → CRM → competitors → Slack → deploy |
-| `/dashboard` | War Room | KPIs, deal table, sentinel feed, "Run Scan" button |
-| `/dashboard/deals` | Deal Desk | Split-pane deal list, transcript viewer, AI coaching sidebar |
-| `/dashboard/targets` | Market Sentinel | Competitor cards, change logs, "Force Scan" button |
-| `/dashboard/alerts` | Threat Intel | Filterable alert feed with severity badges |
-| `/dashboard/forecast` | Revenue Forecast | 4 Recharts: pipeline by stage, win rate, comp breakdown, loss reasons |
-| `/dashboard/settings` | Settings | Profile, integrations, Slack channels, API config |
-| `/dashboard/executive` | Executive Portal | ARR growth, deal velocity, market share, AI summary |
-| `/dashboard/sidekick` | Live Sidekick | Real-time call coaching with keyword detection |
+The frontend is separated into two identical-looking route groups powered by `DashboardShell`:
+
+**1. `/dashboard/*` (Production/Customer)**
+- Fully protected by Clerk middleware.
+- Connects to real FastAPI endpoints.
+- Displays live pipeline, deal analysis, and actual alert feeds.
+
+**2. `/demo/*` (Investor/Demo)**
+- Publicly accessible.
+- Uses `DemoModeProvider forced={true}` to intercept all hooks.
+- Fully populated with `demo-data.ts` (6 competitors: Gong, Clari, Salesforce Einstein, etc.).
+- Alerts and progress animations are elegantly simulated for a flawless pitch.
 
 #### 8.3 WebSocket System (`websocket-context.tsx`)
 Currently **simulated** — ready for real socket.io swap:
@@ -544,11 +549,11 @@ Live at the service URL
 
 **What the container runs (`start.sh`):**
 ```bash
-uvicorn main:app --host 0.0.0.0 --port 8000 &    # FastAPI backend
-streamlit run app.py --server.port 8080 --server.address 0.0.0.0  # Streamlit UI
+streamlit run app.py --server.port 8501 --server.address 0.0.0.0 &  # Streamlit UI
+uvicorn main:app --host 0.0.0.0 --port 8080                         # FastAPI backend
 ```
 
-**Port 8080** is exposed to Google Cloud (the Streamlit UI). FastAPI runs internally on 8000 and Streamlit calls it via `http://localhost:8000`.
+**Port 8080** is exposed to Google Cloud (the FastAPI app). Streamlit runs internally on 8501.
 
 ### 10.2 Vercel (Frontend)
 
@@ -950,4 +955,4 @@ Step 5: Deploy Agents
 
 ---
 
-*This documentation is maintained by the CTO. Last generated: March 18, 2026.*
+*This document provides a static high-level overview. Active engineering notes should be retrieved from `docs/handoffs/current-state.md`.*
