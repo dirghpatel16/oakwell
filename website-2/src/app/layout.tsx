@@ -19,6 +19,17 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const hasClerk = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.trim());
+  const content = (
+    <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
+      <body className="font-sans antialiased">{children}</body>
+    </html>
+  );
+
+  if (!hasClerk) {
+    return content;
+  }
+
   return (
     <ClerkProvider
       appearance={{
@@ -26,9 +37,7 @@ export default function RootLayout({
         variables: { colorPrimary: "#3b82f6" },
       }}
     >
-      <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
-        <body className="font-sans antialiased">{children}</body>
-      </html>
+      {content}
     </ClerkProvider>
   );
 }

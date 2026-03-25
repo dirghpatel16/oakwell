@@ -1,1 +1,1 @@
-export { default } from "@/app/(dashboard)/dashboard/alerts/page";
+export { default } from "@/components/dashboard-pages/alerts-page";

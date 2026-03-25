@@ -7,18 +7,21 @@
 
 ## Start here
 - `docs/handoffs/current-state.md` (To see the backend deployment status)
-- `main.py` (To see the updated API endpoints missing `X-Google-API-Key`)
-- `start.sh` (To confirm the 8080/8501 port swap for Cloud Run)
+- `website-2/src/lib/api.ts` (To verify frontend normalization for live backend payloads)
+- `main.py` (To confirm the actual FastAPI response shapes)
 
 ## Immediate task
-1. Guide the user through the **deployment of the FastAPI backend to Google Cloud Run**. The container entrypoint (`start.sh`) now exposes FastAPI on `8080` (expected by GCP) instead of Streamlit. Redeploying will resolve the "Failed to fetch" error on the `/dashboard`.
-2. Ensure the Cloud Run environment has a valid `GOOGLE_API_KEY` set as an environment variable, since we shifted to Model A billing (absorbing costs) and removed BYOK headers.
-3. Once the API is live, wire up `websocket-context.tsx` to handle real Server-Sent Events (SSE) from the backend instead of simulated intervals.
+1. Run the local dev server and confirm `/demo` is rendering again after the shared-page refactor.
+2. Verify the remaining `/dashboard` pages can safely render live backend data now that Cloud Run is healthy and the API seam normalization has started.
+3. Run a real production analysis so `/memory` is populated and the real dashboard can be validated end-to-end.
+4. Once the data path is verified, wire up `websocket-context.tsx` to handle real Server-Sent Events (SSE) from the backend instead of simulated intervals.
 
 ## Watch out for
 - **Route Prefixing**: Links in the sidebar/shell must use the `basePath` prop from `DashboardShell` to avoid crossing between `/dashboard` and `/demo`.
+- **Shared Page Ownership**: Do not point `/demo` route files at `/dashboard` route files again; both route groups should import shared non-route modules from `src/components/dashboard-pages`.
 - **Clerk Auth**: Ensure `/demo` routes remain public in `middleware.ts` if adding more sub-pages.
+- **Local Auth Fallback**: `src/app/layout.tsx` now bypasses `ClerkProvider` when the publishable key is missing, and `src/middleware.ts` also bypasses Clerk when env vars are absent, so local `/demo` debugging still works.
 - **API Models**: We are absorbing costs (Model A), so never re-introduce `X-Google-API-Key` headers in the frontend.
 
 ## Success condition
-The session is successful if the backend is redeployed, the `/dashboard` can fetch real data from the API (heartbeat/health check passes), and the `/demo` remains fully functional with mock data.
+The session is successful if the live backend remains healthy, the `/dashboard` can render real analysis payloads without contract errors, at least one real production analysis appears in `/memory`, and the `/demo` remains fully functional with mock data.

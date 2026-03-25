@@ -1,1 +1,1 @@
-export { default } from "@/app/(dashboard)/dashboard/forecast/page";
+export { default } from "@/components/dashboard-pages/forecast-page";

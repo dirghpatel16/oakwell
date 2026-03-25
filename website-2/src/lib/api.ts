@@ -7,6 +7,8 @@ const API_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   "https://oakwell-570217803515.us-central1.run.app";
 
+type JsonRecord = Record<string, unknown>;
+
 // ---------------------------------------------------------------------------
 // Types — mirroring FastAPI response schemas
 // ---------------------------------------------------------------------------
@@ -137,6 +139,141 @@ export interface GenerateEmailRequest {
   deal_results?: Record<string, unknown>;
 }
 
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function summarizeList(items: unknown[]): string {
+  return items
+    .map((item) => {
+      if (typeof item === "string") return item;
+      if (!isRecord(item)) return "";
+
+      const claim = asString(item.claim);
+      const risk = asString(item.risk) || asString(item.verdict);
+      const explanation = asString(item.explanation);
+      const summary = [claim, risk, explanation].filter(Boolean).join(" — ");
+
+      if (summary) return summary;
+
+      return Object.values(item)
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .slice(0, 3)
+        .join(" — ");
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function summarizeUnknown(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return summarizeList(value);
+  if (!isRecord(value)) return "";
+
+  const summary = asString(value.summary);
+  const verdict = asString(value.verdict);
+  const notes = asString(value.hardening_notes);
+  const alerts = Array.isArray(value.alerts) ? summarizeList(value.alerts) : "";
+  const missed = Array.isArray(value.missed_ammunition)
+    ? summarizeList(value.missed_ammunition)
+    : "";
+
+  const parts = [
+    verdict ? `Verdict: ${verdict}` : "",
+    summary,
+    notes ? `Notes: ${notes}` : "",
+    alerts,
+    missed ? `Missed Ammunition:\n${missed}` : "",
+  ].filter(Boolean);
+
+  if (parts.length > 0) {
+    return parts.join("\n");
+  }
+
+  return Object.values(value)
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .slice(0, 4)
+    .join("\n");
+}
+
+function normalizeTimeline(value: unknown): { ts: string; score: number; top_clash?: string }[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((item) => {
+    if (!isRecord(item)) return [];
+
+    return [{
+      ts: asString(item.ts),
+      score: typeof item.score === "number" ? item.score : 0,
+      top_clash: asString(item.top_clash) || undefined,
+    }];
+  });
+}
+
+function normalizeMemoryEntry(value: unknown): MemoryEntry {
+  const entry = isRecord(value) ? value : {};
+
+  return {
+    deal_health_score:
+      typeof entry.deal_health_score === "number" ? entry.deal_health_score : 0,
+    talk_track: asString(entry.talk_track),
+    clashes_detected: summarizeUnknown(entry.clashes_detected),
+    visual_proof_summary: summarizeUnknown(entry.visual_proof_summary),
+    proof_filenames: Array.isArray(entry.proof_filenames)
+      ? entry.proof_filenames.filter((item): item is string => typeof item === "string")
+      : [],
+    score_history: Array.isArray(entry.score_history)
+      ? entry.score_history.filter((item): item is number => typeof item === "number")
+      : [],
+    timeline: normalizeTimeline(entry.timeline),
+    analysis_count: typeof entry.analysis_count === "number" ? entry.analysis_count : 0,
+    last_analysis_ts: asString(entry.last_analysis_ts) || null,
+    deep_sentiment: isRecord(entry.deep_sentiment) ? entry.deep_sentiment : undefined,
+  };
+}
+
+function normalizeDealResult(value: unknown): DealResult {
+  const result = isRecord(value) ? value : {};
+
+  return {
+    deal_health_score:
+      typeof result.deal_health_score === "number" ? result.deal_health_score : 0,
+    clashes_detected: summarizeUnknown(result.clashes_detected),
+    talk_track: asString(result.talk_track),
+    proof_artifact_path: asString(result.proof_artifact_path) || undefined,
+    all_proof_filenames: Array.isArray(result.all_proof_filenames)
+      ? result.all_proof_filenames.filter((item): item is string => typeof item === "string")
+      : [],
+    competitor_url: asString(result.competitor_url),
+    market_drift: summarizeUnknown(result.market_drift),
+    score_history: Array.isArray(result.score_history)
+      ? result.score_history.filter((item): item is number => typeof item === "number")
+      : [],
+    timeline: normalizeTimeline(result.timeline),
+    trend: asString(result.trend),
+    cached: Boolean(result.cached),
+    deep_sentiment: isRecord(result.deep_sentiment) ? result.deep_sentiment : undefined,
+    adversarial_critique: summarizeUnknown(result.adversarial_critique),
+    deal_stage: asString(result.deal_stage) || undefined,
+    deal_value: typeof result.deal_value === "number" ? result.deal_value : undefined,
+    score_reasoning: asString(result.score_reasoning) || undefined,
+    risk_level: asString(result.risk_level) || undefined,
+    stage_adjustment: asString(result.stage_adjustment) || undefined,
+    key_pivot_points: Array.isArray(result.key_pivot_points)
+      ? result.key_pivot_points.filter((item): item is string => typeof item === "string")
+      : [],
+    stage_specific_actions: Array.isArray(result.stage_specific_actions)
+      ? result.stage_specific_actions.filter((item): item is string => typeof item === "string")
+      : [],
+    winning_patterns_summary: summarizeUnknown(result.winning_patterns_summary) || undefined,
+    auto_hardened: Boolean(result.auto_hardened),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Fetch helper with error handling
 // ---------------------------------------------------------------------------
@@ -175,7 +312,10 @@ async function request<T>(
 
 /** Fetch the full Neural Memory Bank */
 export async function getMemory(): Promise<MemoryBank> {
-  return request<MemoryBank>("/memory");
+  const memory = await request<Record<string, unknown>>("/memory");
+  return Object.fromEntries(
+    Object.entries(memory).map(([url, entry]) => [url, normalizeMemoryEntry(entry)])
+  );
 }
 
 /** Health check */
@@ -209,7 +349,11 @@ export async function analyzeDeal(body: AnalyzeDealRequest): Promise<AnalyzeDeal
 
 /** Poll deal analysis status */
 export async function getDealStatus(jobId: string): Promise<DealStatusResponse> {
-  return request<DealStatusResponse>(`/deal-status/${jobId}`);
+  const status = await request<DealStatusResponse>(`/deal-status/${jobId}`);
+  return {
+    ...status,
+    result: status.result ? normalizeDealResult(status.result) : undefined,
+  };
 }
 
 /** Generate a follow-up email from deal results */
