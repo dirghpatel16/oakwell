@@ -27,8 +27,13 @@ POLL_INTERVAL = 2
 
 def _headers(api_key: Optional[str]) -> Dict[str, str]:
     out: Dict[str, str] = {"Content-Type": "application/json"}
-    if api_key and api_key.strip():
-        out["X-Google-API-Key"] = api_key.strip()
+    internal_secret = os.environ.get("OAKWELL_INTERNAL_API_SECRET", "").strip()
+    if internal_secret:
+        out["X-Oakwell-Internal-Secret"] = internal_secret
+    out["X-Oakwell-User-Id"] = os.environ.get("OAKWELL_LOCAL_USER_ID", "streamlit-local")
+    local_org = os.environ.get("OAKWELL_LOCAL_ORG_ID", "").strip()
+    if local_org:
+        out["X-Oakwell-Org-Id"] = local_org
     return out
 
 

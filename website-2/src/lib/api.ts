@@ -3,9 +3,7 @@
 // Backend: FastAPI on Google Cloud Run
 // =============================================================================
 
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  "https://oakwell-570217803515.us-central1.run.app";
+const API_URL = "/api/backend";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -23,6 +21,12 @@ export interface MemoryEntry {
   timeline: { ts: string; score: number; top_clash?: string }[];
   analysis_count: number;
   last_analysis_ts: string | null;
+  analysis_mode?: string;
+  evidence_status?: string;
+  evidence_summary?: string;
+  verification_reason?: string;
+  claim_count?: number;
+  verified_claim_count?: number;
   deep_sentiment?: Record<string, unknown>;
   [key: string]: unknown;
 }
@@ -94,6 +98,13 @@ export interface DealResult {
   stage_specific_actions?: string[];
   winning_patterns_summary?: string;
   auto_hardened?: boolean;
+  analysis_mode?: string;
+  evidence_status?: string;
+  evidence_summary?: string;
+  verification_reason?: string;
+  claim_count?: number;
+  verified_claim_count?: number;
+  proof_available?: boolean;
 }
 
 export interface LiveSnippetRequest {
@@ -232,6 +243,15 @@ function normalizeMemoryEntry(value: unknown): MemoryEntry {
     timeline: normalizeTimeline(entry.timeline),
     analysis_count: typeof entry.analysis_count === "number" ? entry.analysis_count : 0,
     last_analysis_ts: asString(entry.last_analysis_ts) || null,
+    analysis_mode: asString(entry.analysis_mode) || undefined,
+    evidence_status: asString(entry.evidence_status) || undefined,
+    evidence_summary: summarizeUnknown(entry.evidence_summary) || undefined,
+    verification_reason: asString(entry.verification_reason) || undefined,
+    claim_count: typeof entry.claim_count === "number" ? entry.claim_count : undefined,
+    verified_claim_count:
+      typeof entry.verified_claim_count === "number"
+        ? entry.verified_claim_count
+        : undefined,
     deep_sentiment: isRecord(entry.deep_sentiment) ? entry.deep_sentiment : undefined,
   };
 }
@@ -271,6 +291,19 @@ function normalizeDealResult(value: unknown): DealResult {
       : [],
     winning_patterns_summary: summarizeUnknown(result.winning_patterns_summary) || undefined,
     auto_hardened: Boolean(result.auto_hardened),
+    analysis_mode: asString(result.analysis_mode) || undefined,
+    evidence_status: asString(result.evidence_status) || undefined,
+    evidence_summary: summarizeUnknown(result.evidence_summary) || undefined,
+    verification_reason: asString(result.verification_reason) || undefined,
+    claim_count: typeof result.claim_count === "number" ? result.claim_count : undefined,
+    verified_claim_count:
+      typeof result.verified_claim_count === "number"
+        ? result.verified_claim_count
+        : undefined,
+    proof_available:
+      typeof result.proof_available === "boolean"
+        ? result.proof_available
+        : undefined,
   };
 }
 

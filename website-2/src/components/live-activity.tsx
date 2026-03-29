@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import { useWebSocket, type LiveOperation } from "@/lib/websocket-context";
-import { Activity, Loader2, CheckCircle2, X, Zap, Eye, Shield } from "lucide-react";
+import { Activity, Loader2, CheckCircle2, X, Shield } from "lucide-react";
 
 // Live Activity Panel — shows real-time agent operations  
 export function LiveActivityPanel() {
@@ -34,11 +34,6 @@ function OperationRow({ operation }: { operation: LiveOperation }) {
   const { clearOperation } = useWebSocket();
   const isComplete = operation.step === "complete";
   const lastMessage = operation.messages[operation.messages.length - 1] || "Initializing...";
-
-  const agentIcons: Record<string, React.ReactNode> = {
-    "Market Sentinel": <Eye className="w-3 h-3" />,
-    "Deal Intelligence": <Zap className="w-3 h-3" />,
-  };
 
   return (
     <div className="px-4 py-3 space-y-2 group">
@@ -78,10 +73,9 @@ function OperationRow({ operation }: { operation: LiveOperation }) {
 // Compact status bar for the header
 export function ConnectionStatus() {
   const { connected, connectionStatus, lastSync } = useWebSocket();
-
-  const timeSince = lastSync
-    ? Math.floor((Date.now() - lastSync.getTime()) / 1000)
-    : null;
+  const syncLabel = lastSync
+    ? lastSync.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    : "SYNCING...";
 
   return (
     <div className="flex items-center gap-3 text-xs font-mono bg-zinc-900/50 px-3 py-1.5 rounded border border-zinc-800">
@@ -93,9 +87,7 @@ export function ConnectionStatus() {
         {connected ? "LIVE" : connectionStatus.toUpperCase()}
       </div>
       <span className="text-zinc-600">|</span>
-      <span className="text-zinc-400">
-        {timeSince !== null ? `SYNC: ${timeSince}s AGO` : "SYNCING..."}
-      </span>
+      <span className="text-zinc-400">{`SYNC: ${syncLabel}`}</span>
     </div>
   );
 }
@@ -143,8 +135,10 @@ export function NotificationBell() {
                     medium: "bg-yellow-500",
                     low: "bg-zinc-500",
                   };
-                  const elapsed = Math.floor((Date.now() - alert.timestamp.getTime()) / 1000);
-                  const timeStr = elapsed < 60 ? `${elapsed}s ago` : elapsed < 3600 ? `${Math.floor(elapsed / 60)}m ago` : `${Math.floor(elapsed / 3600)}h ago`;
+                  const timeStr = alert.timestamp.toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  });
                   
                   return (
                     <div 

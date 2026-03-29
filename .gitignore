@@ -29,6 +29,7 @@ Oakwell/.adk/
 
 # Outputs
 outputs/memory.json
+outputs/outcomes.json
 
 # Proof screenshots
 outputs/*.png

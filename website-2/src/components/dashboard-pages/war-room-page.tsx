@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import React, { useMemo } from "react";
 import {
   ArrowUpRight,
@@ -7,17 +8,19 @@ import {
   Crosshair,
   Loader2,
   Play,
-  AlertCircle,
   RefreshCw,
 } from "lucide-react";
 import { useWebSocket } from "@/lib/websocket-context";
 import { useMemory, useWinningPatterns, useSentinelStatus } from "@/lib/hooks";
+import { useDashboardSurface } from "@/components/dashboard-shell";
+import { DashboardEmptyState, DashboardErrorBanner, DashboardLoadingState } from "@/components/dashboard-state";
 
 export default function WarRoomPage() {
   const { triggerScan, liveOperations, connected, lastSync } = useWebSocket();
   const { data: memory, loading: memLoading, error: memError, refresh: refreshMemory } = useMemory();
   const { data: patterns } = useWinningPatterns();
   const { data: sentinel } = useSentinelStatus();
+  const { basePath, isDemoSurface } = useDashboardSurface();
   const lastSyncLabel = lastSync
     ? lastSync.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
     : "...";
@@ -98,20 +101,22 @@ export default function WarRoomPage() {
         </div>
       </div>
 
-      {memError && (
-        <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-3 flex items-center gap-3 text-sm text-red-400">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>Backend connection issue: {memError}. Showing cached data if available.</span>
-          <button onClick={refreshMemory} className="ml-auto text-xs underline hover:text-red-300">Retry</button>
-        </div>
-      )}
+      {memError ? (
+        <DashboardErrorBanner
+          title="Oakwell engine connection issue"
+          message={`${memError}. The dashboard will keep any cached intelligence in view while you retry.`}
+          actionLabel="Retry"
+          onAction={refreshMemory}
+        />
+      ) : null}
 
-      {memLoading && !memory && (
-        <div className="flex items-center justify-center py-12 gap-3 text-zinc-500">
-          <Loader2 className="w-5 h-5 animate-spin" />
-          <span className="text-sm">Connecting to Oakwell Engine...</span>
-        </div>
-      )}
+      {memLoading && !memory ? (
+        <DashboardLoadingState
+          icon={Loader2}
+          title="Connecting to Oakwell Engine"
+          message="Pulling memory, live watch status, and recent competitive signals so the War Room reflects the current market picture."
+        />
+      ) : null}
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <MetricCard
@@ -148,7 +153,7 @@ export default function WarRoomPage() {
         <div className="lg:col-span-2 space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-zinc-200 uppercase tracking-wider">Deal Intelligence</h2>
-            <a href="/dashboard/deals" className="text-xs text-blue-400 hover:text-blue-300 transition-colors">View All Deals →</a>
+            <Link href={`${basePath}/deals`} className="text-xs text-blue-400 hover:text-blue-300 transition-colors">View All Deals →</Link>
           </div>
 
           <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg overflow-hidden">
@@ -182,7 +187,7 @@ export default function WarRoomPage() {
                 ) : !memLoading ? (
                   <tr>
                     <td colSpan={4} className="py-8 text-center text-sm text-zinc-600">
-                      No deals analyzed yet. Go to <a href="/dashboard/deals" className="text-blue-400 underline">Deal Desk</a> to run your first analysis.
+                      No deals analyzed yet. Go to <Link href={`${basePath}/deals`} className="text-blue-400 underline">Deal Desk</Link> to run your first analysis.
                     </td>
                   </tr>
                 ) : null}
@@ -203,10 +208,14 @@ export default function WarRoomPage() {
             {feedItems.length > 0 ? feedItems.map((item, i) => (
               <FeedItem key={i} time={item.time} title={item.title} desc={item.desc} severity={item.severity} />
             )) : !memLoading ? (
-              <div className="flex flex-col items-center justify-center h-full text-center text-zinc-600 text-xs space-y-2">
-                <Activity className="w-6 h-6 text-zinc-700" />
-                <p>No sentinel data yet. Analyze a deal to start building intelligence.</p>
-              </div>
+              <DashboardEmptyState
+                icon={Activity}
+                eyebrow={isDemoSurface ? "Demo intelligence" : "Production intelligence"}
+                title="No live intelligence has landed yet"
+                message="Run a competitive analysis in Deal Desk and Oakwell will start filling this feed with score shifts, clash summaries, and watchtower updates."
+                ctaHref={`${basePath}/deals`}
+                ctaLabel="Open Deal Desk"
+              />
             ) : null}
           </div>
         </div>

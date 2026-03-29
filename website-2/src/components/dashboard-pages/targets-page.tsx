@@ -13,11 +13,14 @@ import {
 } from "lucide-react";
 import { useWebSocket } from "@/lib/websocket-context";
 import { useMemory, useSentinelStatus } from "@/lib/hooks";
+import { useDashboardSurface } from "@/components/dashboard-shell";
+import { DashboardEmptyState, DashboardLoadingState } from "@/components/dashboard-state";
 
 export default function MarketSentinelPage() {
   const { triggerScan, liveOperations } = useWebSocket();
   const { data: memory, loading: memLoading } = useMemory();
   const { data: sentinel } = useSentinelStatus();
+  const { basePath, isDemoSurface } = useDashboardSurface();
   const isScanning = liveOperations.some((o) => o.type === "scan");
 
   const competitors = useMemo(() => {
@@ -96,20 +99,24 @@ export default function MarketSentinelPage() {
         <StatCard icon={<Camera className="w-4 h-4" />} label="Proofs Captured" value={scanStats.proofsCaptured.toString()} />
       </div>
 
-      {memLoading && competitors.length === 0 && (
-        <div className="flex items-center justify-center py-12 gap-3 text-zinc-500">
-          <Loader2 className="w-5 h-5 animate-spin" />
-          <span className="text-sm">Loading competitor intelligence...</span>
-        </div>
-      )}
+      {memLoading && competitors.length === 0 ? (
+        <DashboardLoadingState
+          icon={Loader2}
+          title="Loading competitor intelligence"
+          message="Refreshing watched accounts, proof artifacts, and the latest movement across the market perimeter."
+        />
+      ) : null}
 
-      {!memLoading && competitors.length === 0 && (
-        <div className="text-center py-16 space-y-3">
-          <Globe className="w-8 h-8 text-zinc-700 mx-auto" />
-          <p className="text-sm text-zinc-500">No competitors tracked yet. Run a deal analysis to start monitoring.</p>
-          <a href="/dashboard/deals" className="text-xs text-blue-400 underline">Go to Deal Desk →</a>
-        </div>
-      )}
+      {!memLoading && competitors.length === 0 ? (
+        <DashboardEmptyState
+          icon={Globe}
+          eyebrow={isDemoSurface ? "Demo watchtower" : "Production watchtower"}
+          title="No competitors are being watched yet"
+          message="The Sentinel becomes valuable as soon as Oakwell processes a live deal. The first analysis seeds tracked competitors, proof artifacts, and drift history."
+          ctaHref={`${basePath}/deals`}
+          ctaLabel="Seed from Deal Desk"
+        />
+      ) : null}
 
       <div className="space-y-6">
         {competitors.map((comp) => (

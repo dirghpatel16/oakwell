@@ -1,17 +1,17 @@
 "use client";
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useDemoMode } from "./demo-context";
 import { DEMO_ALERTS } from "./demo-data";
+import { useHealth, useMemory, useSentinelStatus } from "./hooks";
 
-// Types for the real-time system
-export type AgentStep = 
-  | "idle" 
-  | "connecting" 
-  | "scanning_pages" 
-  | "extracting_claims" 
-  | "verifying_claims" 
-  | "generating_strategy" 
-  | "analyzing_transcript" 
+export type AgentStep =
+  | "idle"
+  | "connecting"
+  | "scanning_pages"
+  | "extracting_claims"
+  | "verifying_claims"
+  | "generating_strategy"
+  | "analyzing_transcript"
   | "scoring_deals"
   | "complete";
 
@@ -21,7 +21,7 @@ export interface LiveOperation {
   target: string;
   agent: string;
   step: AgentStep;
-  progress: number; // 0-100
+  progress: number;
   startedAt: Date;
   messages: string[];
 }
@@ -42,7 +42,6 @@ interface WebSocketContextType {
   realtimeAlerts: RealtimeAlert[];
   unreadAlertCount: number;
   lastSync: Date | null;
-  // Actions
   triggerScan: (competitor: string) => void;
   triggerDealAnalysis: (dealName: string) => void;
   markAlertRead: (id: string) => void;
@@ -52,6 +51,10 @@ interface WebSocketContextType {
 
 const WebSocketContext = createContext<WebSocketContextType | null>(null);
 
+function severityRank(severity: RealtimeAlert["severity"]) {
+  return { critical: 0, high: 1, medium: 2, low: 3 }[severity];
+}
+
 export function useWebSocket() {
   const ctx = useContext(WebSocketContext);
   if (!ctx) throw new Error("useWebSocket must be inside WebSocketProvider");
@@ -60,40 +63,107 @@ export function useWebSocket() {
 
 export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const { isDemo } = useDemoMode();
-  const [connected, setConnected] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "disconnected" | "reconnecting">("connecting");
+  const { data: health, error: healthError, loading: healthLoading } = useHealth();
+  const { data: memory } = useMemory();
+  const { data: sentinel } = useSentinelStatus();
+
   const [liveOperations, setLiveOperations] = useState<LiveOperation[]>([]);
-  const [realtimeAlerts, setRealtimeAlerts] = useState<RealtimeAlert[]>([]);
-  const [lastSync, setLastSync] = useState<Date | null>(null);
+  const [readState, setReadState] = useState<Record<string, boolean>>({});
   const operationTimers = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
-  // Connection + alerts
   useEffect(() => {
-    // Quick "connect" animation
-    const t = setTimeout(() => {
-      setConnected(true);
-      setConnectionStatus("connected");
-      setLastSync(new Date());
-    }, isDemo ? 600 : 1200);
-
-    // Heartbeat
-    const heartbeat = setInterval(() => setLastSync(new Date()), 5000);
-
-    // DEMO MODE: Load rich pre-built alerts
-    if (isDemo) {
-      setRealtimeAlerts(DEMO_ALERTS as RealtimeAlert[]);
-    }
-    // PRODUCTION MODE: No fake alerts — real alerts will come from SSE/webhooks later
-
+    const timers = operationTimers.current;
     return () => {
-      clearTimeout(t);
-      clearInterval(heartbeat);
-      operationTimers.current.forEach(t => clearTimeout(t));
+      timers.forEach((timer) => clearTimeout(timer));
     };
-  }, [isDemo]);
+  }, []);
+
+  const productionAlerts = useMemo(() => {
+    if (!memory) return [];
+
+    const alerts: RealtimeAlert[] = [];
+    Object.entries(memory).forEach(([url, entry]) => {
+      const competitor = url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+      const latestTimeline = entry.timeline?.length ? entry.timeline[entry.timeline.length - 1] : null;
+      const timestampSource = latestTimeline?.ts || entry.last_analysis_ts;
+      const timestamp = timestampSource ? new Date(timestampSource) : new Date();
+      const headline = entry.clashes_detected?.split("\n")[0] || latestTimeline?.top_clash || "Competitive movement detected";
+
+      if ((entry.deal_health_score || 0) < 55) {
+        alerts.push({
+          id: `risk-${url}-${entry.last_analysis_ts || "latest"}`,
+          type: "risk",
+          severity: (entry.deal_health_score || 0) < 40 ? "critical" : "high",
+          title: `${competitor} at ${entry.deal_health_score}/100 — ${headline.slice(0, 90)}`,
+          timestamp,
+          read: false,
+        });
+      }
+
+      if (latestTimeline?.top_clash) {
+        alerts.push({
+          id: `mention-${url}-${latestTimeline.ts}`,
+          type: "mention",
+          severity: latestTimeline.score < 40 ? "high" : latestTimeline.score < 65 ? "medium" : "low",
+          title: `${competitor}: ${latestTimeline.top_clash.slice(0, 90)}`,
+          timestamp,
+          read: false,
+        });
+      }
+    });
+
+    if ((sentinel?.watched_urls || 0) === 0 && Object.keys(memory).length === 0) {
+      alerts.push({
+        id: "system-empty-watchlist",
+        type: "feature",
+        severity: "low",
+        title: "Oakwell is connected, but the watchlist is still empty. Run your first analysis to seed it.",
+        timestamp: new Date(),
+        read: false,
+      });
+    }
+
+    return alerts
+      .sort((a, b) => {
+        const severityDelta = severityRank(a.severity) - severityRank(b.severity);
+        if (severityDelta !== 0) return severityDelta;
+        return b.timestamp.getTime() - a.timestamp.getTime();
+      })
+      .slice(0, 12);
+  }, [memory, sentinel]);
+
+  const realtimeAlerts = useMemo(
+    () =>
+      (isDemo ? (DEMO_ALERTS as RealtimeAlert[]) : productionAlerts).map((alert) => ({
+        ...alert,
+        read: readState[alert.id] ?? alert.read,
+      })),
+    [isDemo, productionAlerts, readState]
+  );
+
+  const lastSync = useMemo(() => {
+    if (!memory) return null;
+
+    const timestamps = Object.values(memory)
+      .flatMap((entry) => [entry.last_analysis_ts, ...(entry.timeline || []).map((item) => item.ts)])
+      .filter((value): value is string => Boolean(value))
+      .map((value) => new Date(value))
+      .filter((date) => !Number.isNaN(date.getTime()))
+      .sort((a, b) => b.getTime() - a.getTime());
+
+    return timestamps[0] ?? null;
+  }, [memory]);
+
+  const connected = isDemo ? true : health?.status === "ok" && !healthError;
+  const connectionStatus = useMemo<WebSocketContextType["connectionStatus"]>(() => {
+    if (isDemo) return "connected";
+    if (healthLoading && !health && !healthError) return "connecting";
+    if (healthError) return lastSync ? "reconnecting" : "disconnected";
+    return connected ? "connected" : "disconnected";
+  }, [connected, health, healthError, healthLoading, isDemo, lastSync]);
 
   const simulateOperation = useCallback((op: LiveOperation) => {
-    setLiveOperations(prev => [op, ...prev]);
+    setLiveOperations((prev) => [op, ...prev]);
 
     const steps: { step: AgentStep; progress: number; message: string; delay: number }[] = [
       { step: "connecting", progress: 5, message: "Establishing secure connection...", delay: 500 },
@@ -101,7 +171,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       { step: "extracting_claims", progress: 45, message: "Extracting pricing & feature claims...", delay: 3000 },
       { step: "verifying_claims", progress: 70, message: "Cross-referencing with Vision AI...", delay: 2500 },
       { step: "generating_strategy", progress: 90, message: "Generating strategic recommendations...", delay: 2000 },
-      { step: "complete", progress: 100, message: "\u2713 Analysis complete", delay: 1000 },
+      { step: "complete", progress: 100, message: "Analysis complete", delay: 1000 },
     ];
 
     if (op.type === "analysis") {
@@ -115,11 +185,11 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     steps.forEach(({ step, progress, message, delay }) => {
       totalDelay += delay;
       const timer = setTimeout(() => {
-        setLiveOperations(prev =>
-          prev.map(o =>
-            o.id === op.id
-              ? { ...o, step, progress, messages: [...o.messages, message] }
-              : o
+        setLiveOperations((prev) =>
+          prev.map((operation) =>
+            operation.id === op.id
+              ? { ...operation, step, progress, messages: [...operation.messages, message] }
+              : operation
           )
         );
       }, totalDelay);
@@ -127,7 +197,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     });
 
     const removeTimer = setTimeout(() => {
-      setLiveOperations(prev => prev.filter(o => o.id !== op.id));
+      setLiveOperations((prev) => prev.filter((operation) => operation.id !== op.id));
     }, totalDelay + 5000);
     operationTimers.current.set(`${op.id}-remove`, removeTimer);
   }, []);
@@ -161,33 +231,35 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   }, [simulateOperation]);
 
   const markAlertRead = useCallback((id: string) => {
-    setRealtimeAlerts(prev => prev.map(a => a.id === id ? { ...a, read: true } : a));
+    setReadState((prev) => ({ ...prev, [id]: true }));
   }, []);
 
   const markAllAlertsRead = useCallback(() => {
-    setRealtimeAlerts(prev => prev.map(a => ({ ...a, read: true })));
-  }, []);
+    setReadState((prev) => Object.fromEntries(realtimeAlerts.map((alert) => [alert.id, true]).concat(Object.entries(prev))));
+  }, [realtimeAlerts]);
 
   const clearOperation = useCallback((id: string) => {
-    setLiveOperations(prev => prev.filter(o => o.id !== id));
+    setLiveOperations((prev) => prev.filter((operation) => operation.id !== id));
   }, []);
 
-  const unreadAlertCount = realtimeAlerts.filter(a => !a.read).length;
+  const unreadAlertCount = realtimeAlerts.filter((alert) => !alert.read).length;
 
   return (
-    <WebSocketContext.Provider value={{
-      connected,
-      connectionStatus,
-      liveOperations,
-      realtimeAlerts,
-      unreadAlertCount,
-      lastSync,
-      triggerScan,
-      triggerDealAnalysis,
-      markAlertRead,
-      markAllAlertsRead,
-      clearOperation,
-    }}>
+    <WebSocketContext.Provider
+      value={{
+        connected: Boolean(connected),
+        connectionStatus,
+        liveOperations,
+        realtimeAlerts,
+        unreadAlertCount,
+        lastSync,
+        triggerScan,
+        triggerDealAnalysis,
+        markAlertRead,
+        markAllAlertsRead,
+        clearOperation,
+      }}
+    >
       {children}
     </WebSocketContext.Provider>
   );

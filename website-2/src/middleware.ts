@@ -1,5 +1,6 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
 // Protect everything inside /dashboard
 const isProtectedRoute = createRouteMatcher(['/dashboard(.*)'])
@@ -16,7 +17,12 @@ const withClerk = clerkMiddleware(async (auth, req) => {
 
 export default hasClerk
   ? withClerk
-  : function middleware() {
+  : function middleware(req: NextRequest) {
+      if (isProtectedRoute(req)) {
+        return new NextResponse("Authentication is not configured for protected routes.", {
+          status: 503,
+        });
+      }
       return NextResponse.next()
     }
 

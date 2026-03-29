@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import React, { useMemo, useState } from "react";
 import {
   ShieldAlert,
@@ -12,6 +13,8 @@ import {
   Loader2,
 } from "lucide-react";
 import { useMemory } from "@/lib/hooks";
+import { useDashboardSurface } from "@/components/dashboard-shell";
+import { DashboardEmptyState, DashboardLoadingState } from "@/components/dashboard-state";
 
 type AlertSeverity = "critical" | "high" | "medium" | "low";
 
@@ -29,6 +32,7 @@ interface Alert {
 export default function ThreatIntelPage() {
   const [filter, setFilter] = useState<"all" | AlertSeverity>("all");
   const { data: memory, loading: memLoading } = useMemory();
+  const { basePath, isDemoSurface } = useDashboardSurface();
 
   const alerts: Alert[] = useMemo(() => {
     if (!memory) return [];
@@ -120,25 +124,29 @@ export default function ThreatIntelPage() {
         <span className="text-[10px] text-zinc-600 font-mono ml-2">{filtered.length} alerts</span>
       </div>
 
-      {memLoading && (
-        <div className="flex items-center justify-center py-20 gap-3">
-          <Loader2 className="w-5 h-5 text-zinc-500 animate-spin" />
-          <span className="text-sm text-zinc-500 font-mono">Loading threat intelligence...</span>
-        </div>
-      )}
+      {memLoading ? (
+        <DashboardLoadingState
+          icon={Loader2}
+          title="Loading threat intelligence"
+          message="Aggregating deal risk, recent clash history, and competitive evidence into a single command feed."
+        />
+      ) : null}
 
-      {!memLoading && alerts.length === 0 && (
-        <div className="text-center py-20 border border-dashed border-zinc-800 rounded-lg">
-          <ShieldAlert className="w-10 h-10 text-zinc-700 mx-auto mb-3" />
-          <p className="text-sm text-zinc-500 mb-1">No threat intelligence yet</p>
-          <p className="text-xs text-zinc-600">Analyze a deal in the <a href="/dashboard/deals" className="text-white hover:underline">Deal Desk</a> to generate alerts.</p>
-        </div>
-      )}
+      {!memLoading && alerts.length === 0 ? (
+        <DashboardEmptyState
+          icon={ShieldAlert}
+          eyebrow={isDemoSurface ? "Demo threat feed" : "Production threat feed"}
+          title="Threat intelligence is ready, but no alerts have been generated yet"
+          message="Once Oakwell analyzes a live competitive deal, disproven claims and critical score shifts will appear here for reps and leadership."
+          ctaHref={`${basePath}/deals`}
+          ctaLabel="Analyze a Deal"
+        />
+      ) : null}
 
       {!memLoading && filtered.length > 0 && (
         <div className="space-y-3">
           {filtered.map((alert) => (
-            <AlertCard key={alert.id} alert={alert} />
+            <AlertCard key={alert.id} alert={alert} basePath={basePath} />
           ))}
         </div>
       )}
@@ -146,7 +154,7 @@ export default function ThreatIntelPage() {
   );
 }
 
-function AlertCard({ alert }: { alert: Alert }) {
+function AlertCard({ alert, basePath }: { alert: Alert; basePath: string }) {
   const [expanded, setExpanded] = useState(false);
 
   const severityColors: Record<AlertSeverity, string> = {
@@ -204,9 +212,9 @@ function AlertCard({ alert }: { alert: Alert }) {
         <div className="px-5 pb-4 pt-0 ml-8 border-t border-zinc-800/30 mt-0 pt-4 space-y-3">
           <p className="text-sm text-zinc-400 leading-relaxed">{alert.description}</p>
           <div className="flex items-center gap-2 pt-2">
-            <a href="/dashboard/deals" className="text-xs bg-white text-black hover:bg-zinc-200 transition-colors px-3 py-1.5 rounded font-medium">
+            <Link href={`${basePath}/deals`} className="text-xs bg-white text-black hover:bg-zinc-200 transition-colors px-3 py-1.5 rounded font-medium">
               Open Deal Desk
-            </a>
+            </Link>
           </div>
         </div>
       )}

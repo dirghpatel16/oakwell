@@ -580,8 +580,8 @@ These must be set in Vercel → Settings → Environment Variables (they're NOT 
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
-| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | `pk_test_bW92aW5nLXR1cnRsZS0xMi5jbGVyay5hY2NvdW50cy5kZXYk` | Clerk frontend auth |
-| `CLERK_SECRET_KEY` | (from .env.local) | Clerk server-side auth |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | `pk_test_or_pk_live_from_clerk_dashboard` | Clerk frontend auth |
+| `CLERK_SECRET_KEY` | `sk_test_or_sk_live_from_clerk_dashboard` | Clerk server-side auth |
 | `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | `/sign-in` | Auth redirect |
 | `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | `/sign-up` | Auth redirect |
 | `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL` | `/dashboard` | Post-login redirect |

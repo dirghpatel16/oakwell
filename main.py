@@ -8,12 +8,15 @@ import gc
 import json
 import logging
 import os
+import re
+import secrets
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, List, Union, Dict, Tuple
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -30,13 +33,16 @@ import tools
 # ---------------------------------------------------------------------------
 
 MIN_PARALLEL_VERIFICATIONS = 2
+MAX_VERIFICATION_CLAIMS = 4
 OUTPUTS_DIR = Path(__file__).resolve().parent / "outputs"
 OUTPUTS_DIR.mkdir(exist_ok=True)
 
 CACHE_TTL_SECONDS = 3600  # 1 hour — skip Playwright if analysed within this window
+RATE_LIMIT_WINDOW_SECONDS = 60
 
 jobs: Dict[str, Dict[str, Any]] = {}
 logger = logging.getLogger("oakwell-api")
+rate_limit_buckets: Dict[str, List[float]] = {}
 
 # ---------------------------------------------------------------------------
 # Firestore client  (project: gen-lang-client-0830900967)
@@ -64,6 +70,14 @@ else:
         "google-cloud-firestore not installed — falling back to local memory.json"
     )
 
+if tools.resolve_genai_api_key():
+    logger.info("Gemini API key detected in backend environment")
+else:
+    logger.warning(
+        "Gemini API key not detected in backend environment. "
+        "Set GOOGLE_API_KEY or GEMINI_API_KEY for analysis endpoints."
+    )
+
 # Legacy JSON path kept as fallback when Firestore is unavailable
 MEMORY_FILE = OUTPUTS_DIR / "memory.json"
 
@@ -77,6 +91,16 @@ _sentinel_registry: Dict[str, Dict[str, str]] = {}
 
 # Watcher interval (seconds) — how often the autonomous loop re-scans
 WATCHER_INTERVAL_SECONDS = int(os.environ.get("WATCHER_INTERVAL", "3600"))  # default 1 h
+INTERNAL_API_SECRET = os.environ.get("OAKWELL_INTERNAL_API_SECRET", "").strip()
+ALLOW_INSECURE_LOCAL_AUTH = os.environ.get("OAKWELL_ALLOW_INSECURE_LOCAL_AUTH") == "1"
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "OAKWELL_ALLOWED_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000",
+    ).split(",")
+    if origin.strip()
+]
 
 # ---------------------------------------------------------------------------
 # Deal Stage Intelligence — 5-stage adaptive playbooks
@@ -142,29 +166,122 @@ def _set_progress(job_id: str, message: str) -> None:
         logger.info("[%s] %s", job_id[:8], message)
 
 
-def _fs_doc_id(url: str) -> str:
-    """Convert a competitor URL to a Firestore-safe document ID.
+class AuthContext(BaseModel):
+    user_id: str
+    org_id: Optional[str] = None
+    scope_id: str
+
+
+def _scope_id_for(user_id: str, org_id: Optional[str] = None) -> str:
+    """Namespace every persisted record to either an org or an individual user."""
+    if org_id:
+        return f"org:{org_id}"
+    return f"user:{user_id}"
+
+
+def _scope_token(value: str) -> str:
+    """Make owner scopes document-id safe without losing readability."""
+    return re.sub(r"[^a-zA-Z0-9_-]+", "_", value)
+
+
+def _fs_doc_id(owner_scope: str, url: str) -> str:
+    """Convert an owner scope + competitor URL to a Firestore-safe document ID.
 
     Firestore document IDs cannot contain '/'.  We replace all slashes
     with '__' and strip the scheme prefix for readability.
     """
-    doc_id = url.replace("https://", "").replace("http://", "").replace("/", "__")
-    return doc_id or "unknown"
+    url_token = url.replace("https://", "").replace("http://", "").replace("/", "__")
+    scope_token = _scope_token(owner_scope)
+    return f"{scope_token}__{url_token or 'unknown'}"
 
 
-def _load_memory() -> Dict[str, Any]:
+def _get_request_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _require_auth_context(request: Request) -> AuthContext:
+    if INTERNAL_API_SECRET:
+        provided_secret = request.headers.get("x-oakwell-internal-secret", "").strip()
+        if not provided_secret or not secrets.compare_digest(provided_secret, INTERNAL_API_SECRET):
+            logger.warning("Rejected request with invalid internal auth secret from %s", _get_request_ip(request))
+            raise HTTPException(status_code=401, detail="Invalid internal auth secret")
+    elif not ALLOW_INSECURE_LOCAL_AUTH:
+        logger.error("Rejected request because backend auth is not configured")
+        raise HTTPException(
+            status_code=503,
+            detail="Backend auth is not configured. Set OAKWELL_INTERNAL_API_SECRET or explicitly allow insecure local auth.",
+        )
+
+    user_id = request.headers.get("x-oakwell-user-id", "").strip()
+    org_id = request.headers.get("x-oakwell-org-id", "").strip() or None
+    if not user_id:
+        if ALLOW_INSECURE_LOCAL_AUTH:
+            user_id = "local-dev"
+        else:
+            logger.warning("Rejected request without user context from %s", _get_request_ip(request))
+            raise HTTPException(status_code=401, detail="Missing authenticated user context")
+
+    return AuthContext(user_id=user_id, org_id=org_id, scope_id=_scope_id_for(user_id, org_id))
+
+
+def _enforce_rate_limit(request: Request, scope_id: str, action: str, limit: int, window_seconds: int = RATE_LIMIT_WINDOW_SECONDS) -> None:
+    """Simple in-memory abuse guard keyed by owner scope + client IP."""
+    now = time.time()
+    bucket_key = f"{action}:{scope_id}:{_get_request_ip(request)}"
+    existing = [ts for ts in rate_limit_buckets.get(bucket_key, []) if now - ts < window_seconds]
+    if len(existing) >= limit:
+        logger.warning("Rate limit exceeded for action=%s scope=%s ip=%s", action, scope_id, _get_request_ip(request))
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    existing.append(now)
+    rate_limit_buckets[bucket_key] = existing
+
+
+def _require_owned_job(job_id: str, auth_ctx: AuthContext) -> Dict[str, Any]:
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("owner_scope") != auth_ctx.scope_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return job
+
+
+def _can_access_proof(filename: str, auth_ctx: AuthContext) -> bool:
+    if not filename:
+        return False
+    memory = _load_memory(auth_ctx.scope_id)
+    for entry in memory.values():
+        proof_files = entry.get("proof_filenames", [])
+        if isinstance(proof_files, list) and filename in proof_files:
+            return True
+    for job in jobs.values():
+        if job.get("owner_scope") != auth_ctx.scope_id:
+            continue
+        result = job.get("result") or {}
+        if filename == result.get("proof_artifact_path"):
+            return True
+        proof_files = result.get("all_proof_filenames", [])
+        if isinstance(proof_files, list) and filename in proof_files:
+            return True
+    return False
+
+
+def _load_memory(owner_scope: str) -> Dict[str, Any]:
     """Read the full Neural Memory Bank.
 
-    Firestore path: stream all docs from oakwell_deals collection.
+    Firestore path: stream docs from oakwell_deals collection filtered to the owner scope.
     Fallback: read outputs/memory.json.
     """
     if _firestore_db is not None:
         try:
-            docs = _firestore_db.collection(FIRESTORE_COLLECTION).stream()
+            docs = _firestore_db.collection(FIRESTORE_COLLECTION).where("owner_scope", "==", owner_scope).stream()
             memory: Dict[str, Any] = {}
             for doc in docs:
                 data = doc.to_dict()
-                url = data.pop("competitor_url", None) or doc.id
+                url = data.pop("competitor_url", None) or data.get("competitor_url") or doc.id
+                data.pop("owner_scope", None)
                 memory[url] = data
             return memory
         except Exception as exc:
@@ -175,34 +292,49 @@ def _load_memory() -> Dict[str, Any]:
         return {}
     try:
         data = json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        scoped: Dict[str, Any] = {}
+        for entry in data.values():
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("owner_scope") != owner_scope:
+                continue
+            url = entry.get("competitor_url")
+            if url:
+                cleaned = dict(entry)
+                cleaned.pop("owner_scope", None)
+                cleaned.pop("competitor_url", None)
+                scoped[url] = cleaned
+        return scoped
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Failed to load memory.json: %s", exc)
         return {}
 
 
-def _load_memory_for_url(url: str) -> Dict[str, Any]:
+def _load_memory_for_url(url: str, owner_scope: str) -> Dict[str, Any]:
     """Load a single competitor record — fast path via Firestore."""
     if _firestore_db is not None:
         try:
-            doc_id = _fs_doc_id(url)
+            doc_id = _fs_doc_id(owner_scope, url)
             doc = _firestore_db.collection(FIRESTORE_COLLECTION).document(doc_id).get()
             if doc.exists:
                 data = doc.to_dict()
                 data.pop("competitor_url", None)
+                data.pop("owner_scope", None)
                 return data
             return {}
         except Exception as exc:
             logger.warning("Firestore _load_memory_for_url failed: %s", exc)
     # fallback
-    return _load_memory().get(url, {})
+    return _load_memory(owner_scope).get(url, {})
 
 
 # ---------------------------------------------------------------------------
 # Public Firestore API: save_deal / get_history
 # ---------------------------------------------------------------------------
 
-def save_deal(data: Dict[str, Any]) -> None:
+def save_deal(data: Dict[str, Any], owner_scope: str) -> None:
     """Store a deal analysis snapshot in the oakwell_deals Firestore collection.
 
     Expected keys in *data*:
@@ -226,10 +358,10 @@ def save_deal(data: Dict[str, Any]) -> None:
         return
 
     # Delegate to _update_memory which handles score_history / timeline merging
-    _update_memory(url, {k: v for k, v in data.items() if k != "competitor_url"})
+    _update_memory(url, {k: v for k, v in data.items() if k != "competitor_url"}, owner_scope)
 
 
-def get_history(url: str, limit: int = 5) -> Dict[str, Any]:
+def get_history(url: str, owner_scope: str, limit: int = 5) -> Dict[str, Any]:
     """Retrieve past deal scores for the Win Probability Trend.
 
     Returns a dict with:
@@ -243,7 +375,7 @@ def get_history(url: str, limit: int = 5) -> Dict[str, Any]:
         url: Competitor URL to look up.
         limit: How many historical entries to return (default 5).
     """
-    record = _load_memory_for_url(url)
+    record = _load_memory_for_url(url, owner_scope)
     if not record:
         return {
             "score_history": [],
@@ -266,11 +398,11 @@ def get_history(url: str, limit: int = 5) -> Dict[str, Any]:
         "timeline": timeline[-limit:],
         "analysis_count": record.get("analysis_count", 0),
         "last_analysis_ts": record.get("last_analysis_ts"),
-        "trend": calculate_trend(url),
+        "trend": calculate_trend(url, owner_scope),
     }
 
 
-def _update_memory(url: str, new_data: Dict[str, Any]) -> None:
+def _update_memory(url: str, new_data: Dict[str, Any], owner_scope: str) -> None:
     """Merge a new analysis snapshot into the Neural Memory Bank.
 
     Firestore path: SET (merge) into oakwell_deals collection (doc ID = URL-safe key).
@@ -280,7 +412,7 @@ def _update_memory(url: str, new_data: Dict[str, Any]) -> None:
     by reading the existing record first, so callers never need to build
     these lists themselves.
     """
-    existing = _load_memory_for_url(url)
+    existing = _load_memory_for_url(url, owner_scope)
 
     # ── score_history: always append, never overwrite ──
     prev_scores = existing.get("score_history", [])
@@ -314,8 +446,8 @@ def _update_memory(url: str, new_data: Dict[str, Any]) -> None:
     # ── Persist ──
     if _firestore_db is not None:
         try:
-            doc_id = _fs_doc_id(url)
-            row: Dict[str, Any] = {"competitor_url": url}
+            doc_id = _fs_doc_id(owner_scope, url)
+            row: Dict[str, Any] = {"competitor_url": url, "owner_scope": owner_scope}
             row.update(new_data)
             _firestore_db.collection(FIRESTORE_COLLECTION).document(doc_id).set(row, merge=True)
             logger.info("Firestore SET (merge) OK for %s (doc %s)", url, doc_id)
@@ -324,8 +456,18 @@ def _update_memory(url: str, new_data: Dict[str, Any]) -> None:
             logger.warning("Firestore _update_memory failed, falling back to JSON: %s", exc)
 
     # ── Fallback: local JSON ──
-    memory = _load_memory()
-    memory[url] = new_data
+    memory: Dict[str, Any] = {}
+    if MEMORY_FILE.exists():
+        try:
+            loaded = json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                memory = loaded
+        except (json.JSONDecodeError, OSError):
+            memory = {}
+    doc_id = _fs_doc_id(owner_scope, url)
+    row = {"competitor_url": url, "owner_scope": owner_scope}
+    row.update(new_data)
+    memory[doc_id] = row
     MEMORY_FILE.write_text(json.dumps(memory, indent=2, default=str), encoding="utf-8")
 
 
@@ -342,7 +484,7 @@ def _is_cache_fresh(prior: Dict[str, Any]) -> bool:
         return False
 
 
-def calculate_trend(url: str) -> str:
+def calculate_trend(url: str, owner_scope: str) -> str:
     """Return a human-readable trend string based on score_history.
 
     Logic:
@@ -351,7 +493,7 @@ def calculate_trend(url: str) -> str:
       - > 5 pts below avg  → 'Declining 📉'
       - within ±5 pts      → 'Stable ↔️'
     """
-    record = _load_memory_for_url(url)
+    record = _load_memory_for_url(url, owner_scope)
     scores = record.get("score_history", [])
     if not isinstance(scores, list) or len(scores) < 2:
         return "Insufficient data"
@@ -374,6 +516,7 @@ def calculate_trend(url: str) -> str:
 
 def _record_deal_outcome(
     competitor_url: str,
+    owner_scope: str,
     outcome: str,
     deal_value: Optional[float] = None,
     deal_stage: Optional[str] = None,
@@ -386,8 +529,9 @@ def _record_deal_outcome(
         - The last known deal_health_score and talk_track from oakwell_deals
         - Timestamp
     """
-    last_analysis = _load_memory_for_url(competitor_url)
+    last_analysis = _load_memory_for_url(competitor_url, owner_scope)
     record = {
+        "owner_scope": owner_scope,
         "competitor_url": competitor_url,
         "outcome": outcome,
         "deal_value": deal_value,
@@ -421,7 +565,7 @@ def _record_deal_outcome(
     return {"status": "saved_local"}
 
 
-def _get_winning_patterns(competitor_url: Optional[str] = None, limit: int = 20) -> Dict[str, Any]:
+def _get_winning_patterns(owner_scope: str, competitor_url: Optional[str] = None, limit: int = 20) -> Dict[str, Any]:
     """Analyze past deal outcomes to extract winning patterns.
 
     Returns:
@@ -435,7 +579,7 @@ def _get_winning_patterns(competitor_url: Optional[str] = None, limit: int = 20)
 
     if _firestore_db is not None:
         try:
-            query = _firestore_db.collection(FIRESTORE_OUTCOMES_COLLECTION)
+            query = _firestore_db.collection(FIRESTORE_OUTCOMES_COLLECTION).where("owner_scope", "==", owner_scope)
             if competitor_url:
                 query = query.where("competitor_url", "==", competitor_url)
             query = query.order_by("recorded_at", direction=_firestore_mod.Query.DESCENDING).limit(limit)
@@ -450,6 +594,7 @@ def _get_winning_patterns(competitor_url: Optional[str] = None, limit: int = 20)
         if outcomes_file.exists():
             try:
                 all_outcomes = json.loads(outcomes_file.read_text(encoding="utf-8"))
+                all_outcomes = [o for o in all_outcomes if o.get("owner_scope") == owner_scope]
                 if competitor_url:
                     all_outcomes = [o for o in all_outcomes if o.get("competitor_url") == competitor_url]
                 outcomes = all_outcomes[-limit:]
@@ -547,23 +692,34 @@ async def _detect_market_drift(
 
 
 class AnalyzeDealRequest(BaseModel):
-    transcript: str = Field(..., description="Internal conversation / call transcript")
-    competitor_url: str = Field(..., description="Competitor website URL for visual verification")
-    competitor_name: Optional[str] = Field(None, description="Competitor display name")
-    your_product: Optional[str] = Field(None, description="Your product name for talk-track")
-    slack_webhook_url: Optional[str] = Field(None, description="Slack incoming webhook URL for real-time alerts")
-    org_id: Optional[str] = Field(None, description="Organisation ID for multi-tenant sentinel alerting")
+    transcript: str = Field(..., min_length=20, max_length=20000, description="Internal conversation / call transcript")
+    competitor_url: str = Field(
+        ...,
+        min_length=10,
+        max_length=2048,
+        pattern=r"^https?://",
+        description="Competitor website URL for visual verification",
+    )
+    competitor_name: Optional[str] = Field(None, max_length=200, description="Competitor display name")
+    your_product: Optional[str] = Field(None, max_length=200, description="Your product name for talk-track")
+    slack_webhook_url: Optional[str] = Field(
+        None,
+        max_length=500,
+        pattern=r"^https://hooks\.slack\.com/services/.*$",
+        description="Slack incoming webhook URL for real-time alerts",
+    )
+    org_id: Optional[str] = Field(None, max_length=200, description="Organisation ID for multi-tenant sentinel alerting")
     deal_stage: Optional[str] = Field(None, description="Deal stage: discovery | technical_eval | proposal | negotiation | closing")
-    deal_value: Optional[float] = Field(None, description="Estimated deal value in USD")
+    deal_value: Optional[float] = Field(None, ge=0, le=1000000000, description="Estimated deal value in USD")
 
 
 class RecordOutcomeRequest(BaseModel):
     """Record a deal outcome for the Win/Loss Feedback Loop."""
-    competitor_url: str = Field(..., description="Competitor URL the deal was against")
+    competitor_url: str = Field(..., min_length=10, max_length=2048, pattern=r"^https?://", description="Competitor URL the deal was against")
     outcome: str = Field(..., description="Deal outcome: won | lost | stalled")
-    deal_value: Optional[float] = Field(None, description="Final deal value in USD")
+    deal_value: Optional[float] = Field(None, ge=0, le=1000000000, description="Final deal value in USD")
     deal_stage: Optional[str] = Field(None, description="Stage when deal concluded")
-    reason: Optional[str] = Field(None, description="Why the deal was won/lost/stalled")
+    reason: Optional[str] = Field(None, max_length=2000, description="Why the deal was won/lost/stalled")
 
 
 class DealStatusResponse(BaseModel):
@@ -582,7 +738,7 @@ class GenerateEmailRequest(BaseModel):
 class LiveSnippetRequest(BaseModel):
     """Payload for the high-speed Live Meeting Sidekick endpoint."""
     snippet: str = Field(..., min_length=1, max_length=5000, description="Raw live-call text snippet (1-5 sentences)")
-    competitor_url: Optional[str] = Field(None, description="Competitor URL for autonomous visual verification")
+    competitor_url: Optional[str] = Field(None, max_length=2048, pattern=r"^https?://", description="Competitor URL for autonomous visual verification")
     urgency_threshold: Optional[float] = Field(0.5, ge=0.0, le=1.0, description="Minimum urgency score to trigger background verification (0-1)")
 
 
@@ -603,19 +759,29 @@ class LiveSnippetResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Oakwell Brain: claim extraction (Research/Vision — gemini-2.0-flash)
+# Oakwell Brain: claim extraction (Research/Vision — fast model)
 # ---------------------------------------------------------------------------
 
 async def _extract_claims_from_transcript(
     transcript: str, competitor_url: str, api_key: Optional[str] = None
 ) -> List[Tuple[str, str]]:
-    """Extract buyer/competitor claims from transcript and pad to 10+ (url, claim) for parallel verification."""
-    from google.genai import Client, types
+    """Extract only explicit, externally verifiable claims from a transcript."""
+    from google.genai import types
 
-    client = Client(api_key=api_key, http_options={"api_version": "v1"}) if api_key else Client(http_options={"api_version": "v1"})
-    prompt = f"""Analyze this sales call transcript and extract every specific claim the buyer or anyone made about the competitor, pricing, or product. 
-Return a JSON array of strings, each one a short claim to verify (e.g. "Starting price is $50/month", "Free trial is 14 days", "Enterprise plan includes SSO").
-Extract at least 5 claims; if there are fewer, add plausible claims that buyers often make (pricing, features, limits).
+    client = tools.create_genai_client(api_key)
+    prompt = f"""Analyze this sales call transcript and extract only EXPLICIT, EXTERNALLY VERIFIABLE claims about the competitor.
+
+Only include claims that could reasonably be checked against a public website, pricing page, help doc, product doc, trust center, or public comparison page.
+Good examples:
+- "Starting price is $50/month"
+- "Enterprise plan includes SSO"
+- "Free trial is 14 days"
+- "SOC 2 is listed"
+
+Do NOT include general opinions, stakeholder concerns, subjective comparisons, or inferred claims.
+Do NOT add plausible claims that were not explicitly stated.
+If there are no concrete public claims to verify, return [].
+
 Transcript:
 ---
 {transcript[:12000]}
@@ -624,7 +790,7 @@ Respond with ONLY a JSON array of claim strings, no other text. Example: ["claim
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash",
+            model=tools.FAST_MODEL,
             contents=prompt,
         )
         text = (response.text or "").strip()
@@ -640,24 +806,34 @@ Respond with ONLY a JSON array of claim strings, no other text. Example: ["claim
         logger.warning("Claim extraction failed: %s", e)
         claims = []
 
-    # Pad to at least MIN_PARALLEL_VERIFICATIONS for high-speed parallel verification
-    default_claims = [
-        "Pricing is displayed on the homepage",
-        "There is a free trial or freemium tier",
-        "Enterprise or contact sales option exists",
-        "Key features are listed on the main page",
-        "Pricing is per seat or per user",
-        "Integration or API is offered",
-        "Security or compliance is mentioned",
-        "Support or help is offered",
-        "Product comparison or alternatives are mentioned",
-        "CTA or sign-up is visible above the fold",
-    ]
-    while len(claims) < MIN_PARALLEL_VERIFICATIONS:
-        claims.append(default_claims[len(claims) % len(default_claims)])
-    # Use exactly 10+ tasks for high-speed parallel verification
-    claims = claims[: max(MIN_PARALLEL_VERIFICATIONS, len(claims))]
-    return [(competitor_url, c) for c in claims]
+    evidence_terms = (
+        "pricing", "price", "trial", "free tier", "freemium", "enterprise",
+        "plan", "sso", "security", "soc 2", "compliance", "gdpr", "hipaa",
+        "integration", "integrations", "api", "data residency", "support",
+        "uptime", "sla", "forecast", "reporting", "workflow", "governance",
+        "seats", "seat", "users", "user", "contact sales",
+    )
+    qualitative_only_terms = (
+        "easier to adopt", "faster to get live", "more powerful", "long-term scale",
+        "simplicity now", "scalability later", "cares about", "main competitive risk",
+        "main advantage", "viewed as", "tension is", "rollout complexity", "rep adoption",
+    )
+
+    filtered_claims: List[str] = []
+    for claim in claims:
+        lowered = claim.lower()
+        has_numeric_signal = bool(
+            re.search(r"(\$|\d+%|\d+\s*(day|days|month|months|seat|seats|user|users|gb|tb))", lowered)
+        )
+        has_evidence_signal = any(term in lowered for term in evidence_terms)
+        is_qualitative_only = any(term in lowered for term in qualitative_only_terms)
+        if is_qualitative_only:
+            continue
+        if has_numeric_signal or has_evidence_signal:
+            filtered_claims.append(claim)
+
+    deduped_claims = list(dict.fromkeys(filtered_claims))[:MAX_VERIFICATION_CLAIMS]
+    return [(competitor_url, c) for c in deduped_claims]
 
 
 # ---------------------------------------------------------------------------
@@ -667,13 +843,17 @@ Respond with ONLY a JSON array of claim strings, no other text. Example: ["claim
 async def _run_parallel_verification(
     competitor_url: str, transcript: str, api_key: Optional[str] = None,
     progress_cb: Optional[Any] = None,
+    claims: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Batch verification: capture ONE screenshot, then verify all claims against it.
 
     Eliminates N-1 redundant browser launches for ~3× faster analysis.
     """
-    tasks_tuples = await _extract_claims_from_transcript(transcript, competitor_url, api_key)
-    claims = [claim for _, claim in tasks_tuples]
+    if claims is None:
+        tasks_tuples = await _extract_claims_from_transcript(transcript, competitor_url, api_key)
+        claims = [claim for _, claim in tasks_tuples]
+    if not claims:
+        return []
 
     # Step 1: Capture a SINGLE screenshot of the competitor page
     if progress_cb:
@@ -751,7 +931,7 @@ def _discrepancy_engine(transcript: str, visual_proof_results: List[Dict[str, An
 
 
 # ---------------------------------------------------------------------------
-# Decomposed Synthesis — Specialist #1: Deal Scorer (gemini-2.0-flash)
+# Decomposed Synthesis — Specialist #1: Deal Scorer (fast model)
 # ---------------------------------------------------------------------------
 
 async def _specialist_score_deal(
@@ -764,9 +944,10 @@ async def _specialist_score_deal(
     deal_value: Optional[float] = None,
     winning_patterns: Optional[Dict[str, Any]] = None,
     api_key: Optional[str] = None,
+    analysis_mode: str = "proof_verification",
+    verification_reason: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Specialist #1: Produce an accurate deal_health_score (gemini-2.0-flash — fast, numeric)."""
-    from google.genai import Client
+    """Specialist #1: Produce an accurate deal_health_score (fast model — numeric, low-latency)."""
 
     comp = competitor_name or "Competitor"
     playbook = _get_stage_playbook(deal_stage)
@@ -783,6 +964,9 @@ async def _specialist_score_deal(
 - Visual Proof Results: {len(visual_proof_results)} total claims checked
 - Verified True: {sum(1 for v in visual_proof_results if v.get('verified'))}
 - Verified False: {sum(1 for v in visual_proof_results if not v.get('verified') and v.get('status') == 'success')}
+- Analysis Mode: {analysis_mode}
+- Verification Coverage: {len(visual_proof_results)} externally verifiable claims checked
+- Verification Notes: {verification_reason or 'Proof-backed verification was attempted'}
 - Historical Win Rate: {winning_patterns.get('win_rate', 'N/A')}
 - Avg Winning Score: {winning_patterns.get('avg_winning_score', 'N/A')}
 - Avg Losing Score: {winning_patterns.get('avg_losing_score', 'N/A')}
@@ -811,6 +995,12 @@ async def _specialist_score_deal(
 - Deals we LOSE average score: {winning_patterns.get('avg_losing_score', 'N/A')}
 - If this deal's profile matches losing patterns, lower the score as a warning
 
+**EVIDENCE RULES:**
+- If analysis mode is strategy_only, this is a strategic brief and NOT a proof-backed verdict
+- If zero externally verifiable claims were checked, do NOT score this deal like a fully verified analysis
+- In strategy_only mode, cap scores below 80 unless the transcript itself shows unusually strong competitive position
+- Make the score_reasoning explicit about evidence limits
+
 Respond with ONLY valid JSON (no markdown fences):
 {{
   "deal_health_score": <number 0-100>,
@@ -819,10 +1009,10 @@ Respond with ONLY valid JSON (no markdown fences):
   "stage_adjustment": "<how the deal stage affected the score>"
 }}"""
 
-    client = Client(api_key=api_key, http_options={"api_version": "v1"}) if api_key else Client(http_options={"api_version": "v1"})
+    client = tools.create_genai_client(api_key)
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash",
+            model=tools.FAST_MODEL,
             contents=prompt,
         )
         text = (response.text or "").strip()
@@ -833,6 +1023,13 @@ Respond with ONLY valid JSON (no markdown fences):
         logger.warning("Specialist scorer failed: %s", e)
 
     # Fallback: deterministic score
+    if analysis_mode == "strategy_only":
+        return {
+            "deal_health_score": 62,
+            "score_reasoning": "Strategic transcript with limited public-proof coverage — returning a fast strategy brief instead of a proof-backed verdict.",
+            "risk_level": "medium",
+            "stage_adjustment": "strategy_only_fast_path",
+        }
     return {
         "deal_health_score": max(0, 100 - 15 * len(clashes_detected)),
         "score_reasoning": "Fallback scoring — specialist unavailable",
@@ -859,9 +1056,10 @@ async def _specialist_write_talk_track(
     winning_patterns: Optional[Dict[str, Any]] = None,
     primary_proof_filename: Optional[str] = None,
     api_key: Optional[str] = None,
+    analysis_mode: str = "proof_verification",
+    verification_reason: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Specialist #2: Write the adversarial talk-track (gemini-2.5-pro — strategic, stage-aware)."""
-    from google.genai import Client
 
     comp = competitor_name or "Competitor"
     prod = your_product or "Our product"
@@ -885,7 +1083,44 @@ async def _specialist_write_talk_track(
 Win rate: {winning_patterns.get('win_rate', 0):.0%} | Revenue won: ${winning_patterns.get('deal_value_won', 0):,.0f} | Revenue lost: ${winning_patterns.get('deal_value_lost', 0):,.0f}
 """
 
-    prompt = f"""You are The Oakwell Strategist — AGI-level Revenue Strategist. Write the exact words a sales rep should say to win this deal.
+    if analysis_mode == "strategy_only":
+        prompt = f"""You are The Oakwell Strategist. Produce a fast, high-signal strategic brief for the rep.
+
+**DEAL CONTEXT:**
+- Competitor: {comp}
+- Our Product: {prod}
+- Deal Stage: {deal_stage or 'unknown'}
+- Deal Value: ${deal_value or 'unknown'}
+- Deal Health Score: {deal_health_score}/100 ({score_reasoning})
+- Analysis Mode: strategy_only
+- Why proof verification was skipped: {verification_reason or 'No concrete public claims were detected'}
+
+**STAGE PLAYBOOK — {(deal_stage or 'discovery').upper()}:**
+- Objective: {playbook['objective']}
+- Talk Track Style: {playbook['talk_track_style']}
+- Focus Areas: {', '.join(playbook['focus_areas'])}
+- AVOID: {', '.join(playbook['avoid'])}
+{win_context}
+**TRANSCRIPT (internal conversation):**
+{transcript[:8000]}
+
+**RESPONSE RULES:**
+1. This is a strategic read, not a screenshot-backed fact check
+2. Be explicit that public-proof verification was not run
+3. Focus on buyer tension, stakeholder mapping, risk framing, and next moves
+4. Do not mention screenshot filenames or pretend proof exists
+5. DO NOT use markdown formatting characters in the talk track
+
+Respond with ONLY valid JSON (no markdown fences):
+{{
+  "talk_track": "<exact script in PLAIN TEXT for the rep>",
+  "clashes_detected": ["<list the strategic risks or tensions, not fake disproven claims>"],
+  "key_pivot_points": ["<3-5 critical moments where the rep should redirect>"],
+  "stage_specific_actions": ["<2-3 actions specific to the {deal_stage or 'discovery'} stage>"],
+  "proof_artifact_path": ""
+}}"""
+    else:
+        prompt = f"""You are The Oakwell Strategist — AGI-level Revenue Strategist. Write the exact words a sales rep should say to win this deal.
 
 **DEAL CONTEXT:**
 - Competitor: {comp}
@@ -941,7 +1176,7 @@ Respond with ONLY valid JSON (no markdown fences):
   "proof_artifact_path": "{primary_proof_filename}"
 }}"""
 
-    client = Client(api_key=api_key, http_options={"api_version": "v1"}) if api_key else Client(http_options={"api_version": "v1"})
+    client = tools.create_genai_client(api_key)
     try:
         response = client.models.generate_content(
             model="gemini-2.5-pro",
@@ -951,13 +1186,35 @@ Respond with ONLY valid JSON (no markdown fences):
         start, end = text.find("{"), text.rfind("}")
         if start != -1 and end != -1:
             data = json.loads(text[start : end + 1])
-            data["proof_artifact_path"] = primary_proof_filename
+            data["proof_artifact_path"] = primary_proof_filename if analysis_mode != "strategy_only" else None
             if "clashes_detected" not in data:
                 data["clashes_detected"] = clashes_detected
             return data
     except Exception as e:
         logger.warning("Specialist talk-track writer failed: %s", e)
 
+    if analysis_mode == "strategy_only":
+        return {
+            "talk_track": (
+                "Acknowledge the buyer's desire for speed, then reframe the decision around the cost of "
+                "outgrowing a simpler system in the next 12 to 18 months. Anchor on forecast accuracy, "
+                "governance, integrations, and migration avoidance for the VP Sales, RevOps, and CIO audience."
+            ),
+            "clashes_detected": [
+                "This transcript is a strategic comparison, not a proof-backed fact check.",
+                verification_reason or "No concrete public claims were available to verify against competitor pages.",
+            ],
+            "key_pivot_points": [
+                "Move the conversation from ease-of-use to the risk of a second migration.",
+                "Translate forecast accuracy into executive confidence and pipeline trust.",
+                "Position integration depth and governance as scale insurance, not admin burden.",
+            ],
+            "stage_specific_actions": [
+                "Tailor the story for VP Sales, RevOps, and CIO stakeholders.",
+                "Bring one concrete migration-risk example to the next call.",
+            ],
+            "proof_artifact_path": None,
+        }
     return {
         "talk_track": "Review the proof screenshots and address each disproven claim with the buyer.",
         "clashes_detected": clashes_detected,
@@ -980,7 +1237,6 @@ async def _run_adversarial_critique(
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Simulate the competitor's CEO stress-testing Oakwell's strategy."""
-    from google.genai import Client
 
     proof_summary = json.dumps(
         [
@@ -1081,11 +1337,7 @@ Respond with ONLY valid JSON (no markdown fences, no extra text):
   "confidence": 0.85
 }}"""
 
-    client = (
-        Client(api_key=api_key, http_options={"api_version": "v1"})
-        if api_key
-        else Client(http_options={"api_version": "v1"})
-    )
+    client = tools.create_genai_client(api_key)
     response = client.models.generate_content(
         model="gemini-2.5-pro",
         contents=prompt,
@@ -1111,6 +1363,7 @@ Respond with ONLY valid JSON (no markdown fences, no extra text):
 
 async def run_oakwell_analysis(
     job_id: str,
+    owner_scope: str,
     transcript: str,
     competitor_url: str,
     competitor_name: Optional[str],
@@ -1125,7 +1378,7 @@ async def run_oakwell_analysis(
         _set_progress(job_id, "Loading Neural Memory…")
 
         # ── Neural Memory: load prior intelligence ──
-        prior = _load_memory_for_url(competitor_url)
+        prior = _load_memory_for_url(competitor_url, owner_scope)
         history_context = {}
         if prior:
             history_context = {
@@ -1144,99 +1397,120 @@ async def run_oakwell_analysis(
                 history_context["deal_health_score"],
             )
 
-        # ── Smart Cache: skip Playwright if analysed < 1 hour ago ──
-        use_cache = prior and _is_cache_fresh(prior)
-
-        if use_cache:
-            _set_progress(job_id, "Cache fresh (<1 h) — reusing prior visual proof…")
-            logger.info("Smart cache HIT for %s — skipping Playwright", competitor_url)
-            # Rebuild visual_proof_results from memory
-            visual_proof_results = [
-                {
-                    "claim": s.get("claim", ""),
-                    "status": s.get("status", "cached"),
-                    "verified": s.get("verified", False),
-                    "confidence_score": s.get("confidence_score", 0.0),
-                    "explanation": s.get("explanation", ""),
-                    "proof_artifact_path": (prior.get("proof_filenames") or [None])[0],
-                }
-                for s in prior.get("visual_proof_summary", [])
-            ]
-            proof_artifacts = prior.get("proof_filenames", [])
-        else:
-            # 1) Extract claims
-            _set_progress(job_id, "Extracting claims from transcript…")
-            # (extraction happens inside _run_parallel_verification)
-
-            # 1b) Parallel verification (Playwright + Vision tasks)
-            visual_proof_results = await _run_parallel_verification(
-                competitor_url, transcript, api_key,
-                progress_cb=lambda msg: _set_progress(job_id, msg),
-            )
-
-            # 2) Extract ALL valid proof filenames (deduplicated, order-preserved)
-            proof_artifacts = list(dict.fromkeys([
-                os.path.basename(v.get("proof_artifact_path"))
-                for v in visual_proof_results
-                if v.get("proof_artifact_path")
-                and str(v.get("proof_artifact_path")).lower() not in ("none", "", "null")
-            ]))
-
-        primary_proof_filename = proof_artifacts[0] if proof_artifacts else None
-
-        # Fallback: scan outputs dir for most recent proof_*.png
-        if not primary_proof_filename:
-            existing = sorted(OUTPUTS_DIR.glob("proof_*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
-            if existing:
-                primary_proof_filename = existing[0].name
-        primary_proof_filename = primary_proof_filename or "proof_captured.png"
-        logger.info("Primary proof filename: %s (all: %s)", primary_proof_filename, proof_artifacts)
-
-        # 3) Market Drift detection — compare current visual proof against memory
-        _set_progress(job_id, "Scanning for market drift…")
+        _set_progress(job_id, "Classifying transcript for verification readiness…")
+        extracted_claims = [
+            claim for _, claim in await _extract_claims_from_transcript(transcript, competitor_url, api_key)
+        ]
+        analysis_mode = "proof_verification" if extracted_claims else "strategy_only"
+        verification_reason = None
+        use_cache = False
+        visual_proof_results: List[Dict[str, Any]] = []
+        proof_artifacts: List[str] = []
+        primary_proof_filename: Optional[str] = None
         drift_report: Dict[str, Any] = {"drift_detected": False, "alerts": []}
-        if prior:
-            drift_report = await _detect_market_drift(
-                competitor_url, visual_proof_results, prior, api_key
-            )
-            if drift_report.get("drift_detected"):
-                logger.info("MARKET DRIFT DETECTED for %s: %s", competitor_url, drift_report["alerts"])
-                history_context["market_drift_alerts"] = drift_report["alerts"]
-                history_context["market_drift_delta"] = drift_report.get("delta", {})
-
-        # 4) Discrepancy engine
-        _set_progress(job_id, "Running discrepancy engine…")
-        clashes_detected = _discrepancy_engine(transcript, visual_proof_results)
-
-        # 5) Deep Market Search — Reddit / G2 / X + SEC / Glassdoor / Greenhouse
-        _set_progress(job_id, "Scanning 6 sources (Reddit, G2, X, SEC, Glassdoor, Greenhouse) for unfiltered intel…")
+        clashes_detected: List[Dict[str, Any]] = []
         deep_sentiment: Dict[str, Any] = {}
-        try:
-            deep_sentiment = await tools.deep_market_search(
-                competitor_name=competitor_name or "competitor",
-                competitor_url=competitor_url,
-                api_key=api_key,
+
+        if analysis_mode == "strategy_only":
+            verification_reason = (
+                "No concrete public claims were found in the transcript, so Oakwell skipped screenshot verification "
+                "and returned a fast strategic brief."
             )
-            logger.info(
-                "Deep Market Search complete for %s — sentiment: %s",
-                competitor_name,
-                deep_sentiment.get("overall_sentiment", "unknown"),
-            )
-        except Exception as ds_err:
-            logger.warning("Deep Market Search failed (non-fatal): %s", ds_err)
+            _set_progress(job_id, "No concrete public claims detected — generating fast strategic brief…")
             deep_sentiment = {
-                "status": "error",
-                "overall_sentiment": "unavailable",
+                "status": "skipped",
+                "overall_sentiment": "not_requested",
                 "recent_complaints": [],
                 "outages": [],
                 "feature_frustrations": [],
-                "killer_insight": "Deep search unavailable — proceed with visual proof only.",
+                "killer_insight": "Oakwell switched to strategy-only mode because the transcript was qualitative rather than proof-verifiable.",
                 "executive_threat_matrix": None,
             }
+        else:
+            # ── Smart Cache: skip Playwright if analysed < 1 hour ago ──
+            use_cache = bool(prior and _is_cache_fresh(prior))
+
+            if use_cache:
+                _set_progress(job_id, "Cache fresh (<1 h) — reusing prior visual proof…")
+                logger.info("Smart cache HIT for %s — skipping Playwright", competitor_url)
+                visual_proof_results = [
+                    {
+                        "claim": s.get("claim", ""),
+                        "status": s.get("status", "cached"),
+                        "verified": s.get("verified", False),
+                        "confidence_score": s.get("confidence_score", 0.0),
+                        "explanation": s.get("explanation", ""),
+                        "proof_artifact_path": (prior.get("proof_filenames") or [None])[0],
+                    }
+                    for s in prior.get("visual_proof_summary", [])
+                ]
+                proof_artifacts = prior.get("proof_filenames", [])
+            else:
+                _set_progress(job_id, f"Found {len(extracted_claims)} public claims — capturing proof…")
+                visual_proof_results = await _run_parallel_verification(
+                    competitor_url,
+                    transcript,
+                    api_key,
+                    progress_cb=lambda msg: _set_progress(job_id, msg),
+                    claims=extracted_claims,
+                )
+
+                proof_artifacts = list(dict.fromkeys([
+                    os.path.basename(v.get("proof_artifact_path"))
+                    for v in visual_proof_results
+                    if v.get("proof_artifact_path")
+                    and str(v.get("proof_artifact_path")).lower() not in ("none", "", "null")
+                ]))
+
+            primary_proof_filename = proof_artifacts[0] if proof_artifacts else None
+
+            if not primary_proof_filename:
+                existing = sorted(OUTPUTS_DIR.glob("proof_*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
+                if existing:
+                    primary_proof_filename = existing[0].name
+            primary_proof_filename = primary_proof_filename or "proof_captured.png"
+            logger.info("Primary proof filename: %s (all: %s)", primary_proof_filename, proof_artifacts)
+
+            _set_progress(job_id, "Scanning for market drift…")
+            if prior:
+                drift_report = await _detect_market_drift(
+                    competitor_url, visual_proof_results, prior, api_key
+                )
+                if drift_report.get("drift_detected"):
+                    logger.info("MARKET DRIFT DETECTED for %s: %s", competitor_url, drift_report["alerts"])
+                    history_context["market_drift_alerts"] = drift_report["alerts"]
+                    history_context["market_drift_delta"] = drift_report.get("delta", {})
+
+            _set_progress(job_id, "Running discrepancy engine…")
+            clashes_detected = _discrepancy_engine(transcript, visual_proof_results)
+
+            _set_progress(job_id, "Scanning 6 sources (Reddit, G2, X, SEC, Glassdoor, Greenhouse) for unfiltered intel…")
+            try:
+                deep_sentiment = await tools.deep_market_search(
+                    competitor_name=competitor_name or "competitor",
+                    competitor_url=competitor_url,
+                    api_key=api_key,
+                )
+                logger.info(
+                    "Deep Market Search complete for %s — sentiment: %s",
+                    competitor_name,
+                    deep_sentiment.get("overall_sentiment", "unknown"),
+                )
+            except Exception as ds_err:
+                logger.warning("Deep Market Search failed (non-fatal): %s", ds_err)
+                deep_sentiment = {
+                    "status": "error",
+                    "overall_sentiment": "unavailable",
+                    "recent_complaints": [],
+                    "outages": [],
+                    "feature_frustrations": [],
+                    "killer_insight": "Deep search unavailable — proceed with visual proof only.",
+                    "executive_threat_matrix": None,
+                }
 
         # 6a) Win/Loss Feedback — fetch patterns from past outcomes
         _set_progress(job_id, "Loading winning patterns from deal history…")
-        winning_patterns = _get_winning_patterns(competitor_url)
+        winning_patterns = _get_winning_patterns(owner_scope, competitor_url)
         if winning_patterns.get("total_outcomes", 0) > 0:
             logger.info(
                 "Win/Loss patterns loaded: win_rate=%.0f%%, avg_win_score=%.0f, outcomes=%d",
@@ -1257,6 +1531,8 @@ async def run_oakwell_analysis(
             deal_value,
             winning_patterns,
             api_key,
+            analysis_mode,
+            verification_reason,
         )
         _deal_score = score_result.get("deal_health_score", 50)
         _score_reasoning = score_result.get("score_reasoning", "")
@@ -1278,6 +1554,8 @@ async def run_oakwell_analysis(
             winning_patterns,
             primary_proof_filename,
             api_key,
+            analysis_mode,
+            verification_reason,
         )
         result["deal_health_score"] = _deal_score
         result["score_reasoning"] = _score_reasoning
@@ -1291,39 +1569,50 @@ async def run_oakwell_analysis(
             "avg_winning_score": winning_patterns.get("avg_winning_score", 0),
         }
 
-        # 7) Adversarial Critic — war-game the strategy (gemini-2.5-pro)
-        _set_progress(job_id, "Running Adversarial Stress-Test (Competitor CEO sim)…")
         adversarial_critique: Dict[str, Any] = {}
-        try:
-            adversarial_critique = await _run_adversarial_critique(
-                talk_track=result.get("talk_track", ""),
-                clashes=clashes_detected,
-                visual_proof_results=visual_proof_results,
-                deep_sentiment=deep_sentiment,
-                competitor_name=competitor_name or "competitor",
-                api_key=api_key,
-            )
-            logger.info(
-                "Adversarial Critique verdict for %s: %s (confidence %.2f)",
-                competitor_name,
-                adversarial_critique.get("verdict", "unknown"),
-                adversarial_critique.get("confidence", 0.0),
-            )
-        except Exception as ac_err:
-            logger.warning("Adversarial Critique failed (non-fatal): %s", ac_err)
+        if analysis_mode == "strategy_only":
             adversarial_critique = {
-                "verdict": "UNAVAILABLE",
-                "counter_attack_1": {"angle": "N/A", "competitor_response": "Critique unavailable", "threat_level": "unknown"},
-                "counter_attack_2": {"angle": "N/A", "competitor_response": "Critique unavailable", "threat_level": "unknown"},
+                "verdict": "SKIPPED",
+                "summary": "Adversarial hardening was skipped in strategy-only mode to return guidance faster.",
+                "counter_attack_1": {"angle": "N/A", "competitor_response": "Skipped in strategy-only mode", "threat_level": "unknown"},
+                "counter_attack_2": {"angle": "N/A", "competitor_response": "Skipped in strategy-only mode", "threat_level": "unknown"},
                 "missed_ammunition": [],
-                "hardening_notes": "Adversarial critic did not run — proceed with caution.",
+                "hardening_notes": "No public-proof attack surface was available, so Oakwell returned the first strategic brief fast.",
                 "kill_shot_proof": "",
                 "confidence": 0.0,
             }
+        else:
+            _set_progress(job_id, "Running Adversarial Stress-Test (Competitor CEO sim)…")
+            try:
+                adversarial_critique = await _run_adversarial_critique(
+                    talk_track=result.get("talk_track", ""),
+                    clashes=clashes_detected,
+                    visual_proof_results=visual_proof_results,
+                    deep_sentiment=deep_sentiment,
+                    competitor_name=competitor_name or "competitor",
+                    api_key=api_key,
+                )
+                logger.info(
+                    "Adversarial Critique verdict for %s: %s (confidence %.2f)",
+                    competitor_name,
+                    adversarial_critique.get("verdict", "unknown"),
+                    adversarial_critique.get("confidence", 0.0),
+                )
+            except Exception as ac_err:
+                logger.warning("Adversarial Critique failed (non-fatal): %s", ac_err)
+                adversarial_critique = {
+                    "verdict": "UNAVAILABLE",
+                    "counter_attack_1": {"angle": "N/A", "competitor_response": "Critique unavailable", "threat_level": "unknown"},
+                    "counter_attack_2": {"angle": "N/A", "competitor_response": "Critique unavailable", "threat_level": "unknown"},
+                    "missed_ammunition": [],
+                    "hardening_notes": "Adversarial critic did not run — proceed with caution.",
+                    "kill_shot_proof": "",
+                    "confidence": 0.0,
+                }
 
         # 8) AUTO-HARDEN — If critic REJECTED, re-run talk-track specialist with critique injected
         _critic_v = adversarial_critique.get("verdict", "")
-        if "REJECTED" in _critic_v.upper():
+        if analysis_mode != "strategy_only" and "REJECTED" in _critic_v.upper():
             _set_progress(job_id, "Critic REJECTED strategy — auto-hardening with kill-shot evidence…")
             logger.info("Auto-hardening: critic rejected strategy for %s — re-synthesizing", competitor_name)
 
@@ -1362,6 +1651,8 @@ async def run_oakwell_analysis(
                     winning_patterns,
                     primary_proof_filename,
                     api_key,
+                    analysis_mode,
+                    verification_reason,
                 )
                 # Only accept if it produced a real talk-track
                 if hardened_result.get("talk_track") and len(hardened_result["talk_track"]) > 50:
@@ -1379,8 +1670,30 @@ async def run_oakwell_analysis(
             except Exception as harden_err:
                 logger.warning("Auto-hardening failed (using original strategy): %s", harden_err)
 
-        # 9) FORCE the proof_artifact_path
-        result["proof_artifact_path"] = primary_proof_filename
+        claim_count = len(extracted_claims)
+        verified_claim_count = sum(1 for v in visual_proof_results if v.get("status") in ("success", "partial_success", "cached"))
+        proof_available = bool(proof_artifacts)
+        if analysis_mode == "strategy_only":
+            evidence_status = "strategy_only"
+            evidence_summary = verification_reason or "Oakwell returned a strategy brief without public-proof verification."
+        elif proof_available:
+            evidence_status = "proof_captured"
+            cache_phrase = " using cached proof" if use_cache else ""
+            evidence_summary = (
+                f"Checked {verified_claim_count} public claim(s){cache_phrase} and captured {len(proof_artifacts)} proof artifact(s)."
+            )
+        else:
+            evidence_status = "proof_unavailable"
+            evidence_summary = "Oakwell attempted public verification but no proof artifact was saved for the dashboard."
+
+        result["proof_artifact_path"] = primary_proof_filename if proof_available else None
+        result["analysis_mode"] = analysis_mode
+        result["evidence_status"] = evidence_status
+        result["evidence_summary"] = evidence_summary
+        result["verification_reason"] = verification_reason
+        result["claim_count"] = claim_count
+        result["verified_claim_count"] = verified_claim_count
+        result["proof_available"] = proof_available
 
         # 10) Build a visual proof summary for memory persistence
         _set_progress(job_id, "Persisting to Neural Memory…")
@@ -1409,10 +1722,16 @@ async def run_oakwell_analysis(
             "visual_proof_summary": visual_proof_summary,
             "proof_filenames": proof_artifacts,
             "market_drift": drift_report if drift_report.get("drift_detected") else None,
-        })
+            "analysis_mode": analysis_mode,
+            "evidence_status": evidence_status,
+            "evidence_summary": evidence_summary,
+            "verification_reason": verification_reason,
+            "claim_count": claim_count,
+            "verified_claim_count": verified_claim_count,
+        }, owner_scope)
 
         # Read back the merged data for the job result
-        updated_record = _load_memory_for_url(competitor_url)
+        updated_record = _load_memory_for_url(competitor_url, owner_scope)
         score_history = updated_record.get("score_history", [new_score])
         timeline = updated_record.get("timeline", [])
 
@@ -1422,13 +1741,13 @@ async def run_oakwell_analysis(
             "deal_health_score": new_score,
             "clashes_detected": result.get("clashes_detected", clashes_detected),
             "talk_track": result.get("talk_track", ""),
-            "proof_artifact_path": primary_proof_filename,
+            "proof_artifact_path": result.get("proof_artifact_path"),
             "all_proof_filenames": proof_artifacts,
             "competitor_url": competitor_url,
             "market_drift": drift_report if drift_report.get("drift_detected") else None,
             "score_history": score_history,
             "timeline": timeline,
-            "trend": calculate_trend(competitor_url),
+            "trend": calculate_trend(competitor_url, owner_scope),
             "cached": use_cache,
             "deep_sentiment": deep_sentiment,
             "adversarial_critique": adversarial_critique,
@@ -1442,6 +1761,13 @@ async def run_oakwell_analysis(
             "stage_specific_actions": result.get("stage_specific_actions", []),
             "winning_patterns_summary": result.get("winning_patterns_summary", {}),
             "auto_hardened": result.get("auto_hardened", False),
+            "analysis_mode": analysis_mode,
+            "evidence_status": evidence_status,
+            "evidence_summary": evidence_summary,
+            "verification_reason": verification_reason,
+            "claim_count": claim_count,
+            "verified_claim_count": verified_claim_count,
+            "proof_available": proof_available,
         }
 
         # ── Autonomous Slack Alert — fire on critical risk ──
@@ -1490,10 +1816,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-Oakwell-Internal-Secret", "X-Oakwell-User-Id", "X-Oakwell-Org-Id"],
 )
 
 
@@ -1502,15 +1828,28 @@ async def analyze_deal(
     req: AnalyzeDealRequest,
     request: Request,
     background_tasks: BackgroundTasks,
+    auth_ctx: AuthContext = Depends(_require_auth_context),
 ) -> Dict[str, str]:
     """Enqueue deal analysis. Returns job_id immediately; poll GET /deal-status/{job_id} for results."""
-    api_key = None  # Model A: server-side GOOGLE_API_KEY env var
+    _enforce_rate_limit(request, auth_ctx.scope_id, "analyze-deal", limit=6, window_seconds=300)
+    try:
+        api_key = tools.require_genai_api_key()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {"status": "pending", "result": None, "error": None, "progress_message": "Queued…"}
+    jobs[job_id] = {
+        "status": "pending",
+        "result": None,
+        "error": None,
+        "progress_message": "Queued…",
+        "owner_scope": auth_ctx.scope_id,
+        "user_id": auth_ctx.user_id,
+        "org_id": auth_ctx.org_id,
+    }
     slack_url = req.slack_webhook_url or request.headers.get("X-Slack-Webhook-URL") or None
 
     # ── Register org in the Sentinel watcher registry ──
-    _org = req.org_id or "default"
+    _org = auth_ctx.scope_id
     if slack_url:
         if req.competitor_url not in _sentinel_registry:
             _sentinel_registry[req.competitor_url] = {}
@@ -1520,6 +1859,7 @@ async def analyze_deal(
     background_tasks.add_task(
         run_oakwell_analysis,
         job_id,
+        auth_ctx.scope_id,
         req.transcript,
         req.competitor_url,
         req.competitor_name,
@@ -1533,16 +1873,21 @@ async def analyze_deal(
 
 
 @app.post("/generate-email")
-async def generate_email(req: GenerateEmailRequest, request: Request) -> Dict[str, str]:
+async def generate_email(
+    req: GenerateEmailRequest,
+    request: Request,
+    auth_ctx: AuthContext = Depends(_require_auth_context),
+) -> Dict[str, str]:
     """Generate a follow-up email from either a job_id or provided deal results."""
+    _enforce_rate_limit(request, auth_ctx.scope_id, "generate-email", limit=10, window_seconds=300)
     logger.info(f"Email request: job_id={req.job_id}, has_deal_results={bool(req.deal_results)}")
-    api_key = None  # Model A: server-side GOOGLE_API_KEY env var
+    try:
+        api_key = tools.require_genai_api_key()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     deal_results: Optional[Dict[str, Any]] = None
     if req.job_id:
-        job = jobs.get(req.job_id)
-        if not job:
-            logger.error(f"Email generation failed: Job {req.job_id} not found")
-            raise HTTPException(status_code=404, detail="Job not found")
+        job = _require_owned_job(req.job_id, auth_ctx)
         if job.get("status") != "completed":
             logger.error(f"Email generation failed: Job {req.job_id} status={job.get('status')}")
             raise HTTPException(status_code=409, detail="Job not completed")
@@ -1571,7 +1916,11 @@ async def generate_email(req: GenerateEmailRequest, request: Request) -> Dict[st
 # ---------------------------------------------------------------------------
 
 @app.post("/live-snippet", response_model=LiveSnippetResponse)
-async def live_snippet(req: LiveSnippetRequest, request: Request) -> LiveSnippetResponse:
+async def live_snippet(
+    req: LiveSnippetRequest,
+    request: Request,
+    auth_ctx: AuthContext = Depends(_require_auth_context),
+) -> LiveSnippetResponse:
     """Ultra-fast live-call snippet analysis.
 
     1. Uses gemini-2.0-flash (via tools.process_live_snippet) for sub-second
@@ -1580,7 +1929,11 @@ async def live_snippet(req: LiveSnippetRequest, request: Request) -> LiveSnippet
     3. If a pricing claim is found AND urgency >= threshold, autonomously
        fires tools.verify_claim_with_vision in the background.
     """
-    api_key = None  # Model A: server-side GOOGLE_API_KEY env var
+    _enforce_rate_limit(request, auth_ctx.scope_id, "live-snippet", limit=30, window_seconds=60)
+    try:
+        api_key = tools.require_genai_api_key()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     snippet_text = req.snippet.strip()
     if not snippet_text:
         return LiveSnippetResponse(status="skipped", reason="empty snippet")
@@ -1706,11 +2059,9 @@ async def live_snippet(req: LiveSnippetRequest, request: Request) -> LiveSnippet
 
 
 @app.get("/deal-status/{job_id}", response_model=DealStatusResponse)
-async def deal_status(job_id: str) -> DealStatusResponse:
+async def deal_status(job_id: str, auth_ctx: AuthContext = Depends(_require_auth_context)) -> DealStatusResponse:
     """Return job status and structured result (deal_health_score, clashes_detected, talk_track, proof_artifact_path)."""
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    j = jobs[job_id]
+    j = _require_owned_job(job_id, auth_ctx)
     return DealStatusResponse(
         job_id=job_id,
         status=j["status"],
@@ -1721,12 +2072,14 @@ async def deal_status(job_id: str) -> DealStatusResponse:
 
 
 @app.get("/proof/{filename}")
-async def get_proof(filename: str):
+async def get_proof(filename: str, auth_ctx: AuthContext = Depends(_require_auth_context)):
     """Serve a proof screenshot from OUTPUTS_DIR for the dashboard."""
     if not filename or filename.lower() == "none":
         raise HTTPException(status_code=404, detail="Proof not found")
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
+    if not _can_access_proof(filename, auth_ctx):
+        raise HTTPException(status_code=403, detail="Forbidden")
     filepath = (OUTPUTS_DIR / filename).resolve()
     try:
         filepath.relative_to(OUTPUTS_DIR.resolve())
@@ -1742,31 +2095,33 @@ async def health() -> Dict[str, str]:
 
 
 @app.get("/sentinel-status")
-async def sentinel_status() -> Dict[str, Any]:
+async def sentinel_status(auth_ctx: AuthContext = Depends(_require_auth_context)) -> Dict[str, Any]:
     """Return the current Sentinel watcher registry for diagnostics."""
+    visible_registry = {
+        url: [scope_id for scope_id in orgs.keys() if scope_id == auth_ctx.scope_id]
+        for url, orgs in _sentinel_registry.items()
+        if auth_ctx.scope_id in orgs
+    }
     return {
-        "watched_urls": len(_sentinel_registry),
+        "watched_urls": len(visible_registry),
         "interval_seconds": WATCHER_INTERVAL_SECONDS,
-        "registry": {
-            url: list(orgs.keys())
-            for url, orgs in _sentinel_registry.items()
-        },
+        "registry": visible_registry,
     }
 
 
 @app.get("/memory")
-async def get_memory() -> Dict[str, Any]:
+async def get_memory(auth_ctx: AuthContext = Depends(_require_auth_context)) -> Dict[str, Any]:
     """Return the entire memory bank for UI insights."""
-    return _load_memory()
+    return _load_memory(auth_ctx.scope_id)
 
 
 @app.get("/competitor-trend")
-async def competitor_trend(url: str) -> Dict[str, Any]:
+async def competitor_trend(url: str, auth_ctx: AuthContext = Depends(_require_auth_context)) -> Dict[str, Any]:
     """Return the Market Pulse trend analysis for a specific competitor URL.
 
     Uses get_history() to query the last 5 deals from Firestore.
     """
-    history = get_history(url, limit=5)
+    history = get_history(url, auth_ctx.scope_id, limit=5)
     return {
         "url": url,
         "trend": history["trend"],
@@ -1778,16 +2133,14 @@ async def competitor_trend(url: str) -> Dict[str, Any]:
 
 
 @app.get("/executive-summary/{job_id}")
-async def executive_summary(job_id: str) -> Dict[str, str]:
+async def executive_summary(job_id: str, auth_ctx: AuthContext = Depends(_require_auth_context)) -> Dict[str, str]:
     """Generate a Markdown Executive Summary for a completed job."""
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    j = jobs[job_id]
+    j = _require_owned_job(job_id, auth_ctx)
     if j.get("status") != "completed":
         raise HTTPException(status_code=409, detail="Job not completed yet")
     result = j.get("result", {})
     comp_url = result.get("competitor_url", "")
-    memory_data = _load_memory_for_url(comp_url) if comp_url else None
+    memory_data = _load_memory_for_url(comp_url, auth_ctx.scope_id) if comp_url else None
     summary_md = tools.generate_executive_summary(result, memory_data=memory_data)
     return {"markdown": summary_md}
 
@@ -1797,12 +2150,18 @@ async def executive_summary(job_id: str) -> Dict[str, str]:
 # ---------------------------------------------------------------------------
 
 @app.post("/record-outcome")
-async def record_outcome(req: RecordOutcomeRequest) -> Dict[str, Any]:
+async def record_outcome(
+    req: RecordOutcomeRequest,
+    request: Request,
+    auth_ctx: AuthContext = Depends(_require_auth_context),
+) -> Dict[str, Any]:
     """Record a deal outcome (won/lost/stalled) for the Win/Loss Feedback Loop."""
+    _enforce_rate_limit(request, auth_ctx.scope_id, "record-outcome", limit=20, window_seconds=300)
     if req.outcome not in ("won", "lost", "stalled"):
         raise HTTPException(status_code=400, detail="outcome must be: won | lost | stalled")
     result = _record_deal_outcome(
         competitor_url=req.competitor_url,
+        owner_scope=auth_ctx.scope_id,
         outcome=req.outcome,
         deal_value=req.deal_value,
         deal_stage=req.deal_stage,
@@ -1812,23 +2171,26 @@ async def record_outcome(req: RecordOutcomeRequest) -> Dict[str, Any]:
 
 
 @app.get("/winning-patterns")
-async def winning_patterns_endpoint(url: Optional[str] = None) -> Dict[str, Any]:
+async def winning_patterns_endpoint(
+    url: Optional[str] = None,
+    auth_ctx: AuthContext = Depends(_require_auth_context),
+) -> Dict[str, Any]:
     """Return winning patterns learned from past deal outcomes."""
-    return _get_winning_patterns(competitor_url=url)
+    return _get_winning_patterns(auth_ctx.scope_id, competitor_url=url)
 
 
 # ---------------------------------------------------------------------------
 # Autonomous Market Watcher — background sentinel loop
 # ---------------------------------------------------------------------------
 
-async def _watch_single_competitor(url: str) -> None:
+async def _watch_single_competitor(url: str, owner_scope: str) -> None:
     """Scrape one competitor URL and alert all registered orgs if drift is detected.
 
     Uses _verification_semaphore so only one Playwright session runs at a time,
     staying within free-tier rate limits.
     """
     logger.info("Watcher: scanning %s", url)
-    prior = _load_memory_for_url(url)
+    prior = _load_memory_for_url(url, owner_scope)
     if not prior:
         logger.info("Watcher: no prior memory for %s — skipping", url)
         return
@@ -1892,6 +2254,8 @@ async def _watch_single_competitor(url: str) -> None:
     orgs = _sentinel_registry.get(url, {})
     comp_name = url.replace("https://", "").replace("http://", "").split("/")[0]
     for org_id, webhook_url in orgs.items():
+        if org_id != owner_scope:
+            continue
         try:
             _alert_payload = {
                 "competitor_name": comp_name,
@@ -1930,27 +2294,31 @@ async def autonomous_market_watch() -> None:
     while True:
         try:
             # Collect all unique URLs to watch
-            watched_urls: set = set(_sentinel_registry.keys())
+            watched_pairs: set[Tuple[str, str]] = set()
+            for url, orgs in _sentinel_registry.items():
+                for owner_scope in orgs.keys():
+                    watched_pairs.add((url, owner_scope))
 
             # Also pull URLs from Firestore if available
             if _firestore_db is not None:
                 try:
-                    docs = _firestore_db.collection(FIRESTORE_COLLECTION).select(["competitor_url"]).stream()
+                    docs = _firestore_db.collection(FIRESTORE_COLLECTION).select(["competitor_url", "owner_scope"]).stream()
                     for doc in docs:
                         d = doc.to_dict()
                         u = d.get("competitor_url")
-                        if u:
-                            watched_urls.add(u)
+                        owner_scope = d.get("owner_scope")
+                        if u and owner_scope:
+                            watched_pairs.add((u, owner_scope))
                 except Exception as fs_err:
                     logger.warning("Watcher: Firestore URL fetch failed: %s", fs_err)
 
-            if not watched_urls:
+            if not watched_pairs:
                 logger.info("Watcher: no URLs to watch — sleeping")
             else:
-                logger.info("Watcher: scanning %d competitor URLs", len(watched_urls))
-                for url in watched_urls:
+                logger.info("Watcher: scanning %d competitor scope/url pairs", len(watched_pairs))
+                for url, owner_scope in watched_pairs:
                     try:
-                        await _watch_single_competitor(url)
+                        await _watch_single_competitor(url, owner_scope)
                     except Exception as exc:
                         logger.warning("Watcher: error scanning %s: %s", url, exc)
                     # Small stagger between competitors

@@ -5,6 +5,7 @@ and Playwright-based competitor scraping (full React-rendered content → Markdo
 """
 
 import logging
+import os
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Union, Dict, Any
@@ -21,6 +22,46 @@ logger = logging.getLogger("BattleCardPipeline")
 # Create outputs directory for generated files
 OUTPUTS_DIR = Path(__file__).parent / "outputs"
 OUTPUTS_DIR.mkdir(exist_ok=True)
+
+# Active fast model for the working product path.
+FAST_MODEL = os.environ.get("OAKWELL_FAST_MODEL", "gemini-2.5-flash")
+
+
+def resolve_genai_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    """Resolve the backend Gemini API key deterministically.
+
+    Accepts an explicit override first, then falls back to server-side env vars.
+    Supporting both names makes deployments less brittle across environments.
+    """
+    candidates = [
+        api_key,
+        os.environ.get("GOOGLE_API_KEY"),
+        os.environ.get("GEMINI_API_KEY"),
+    ]
+
+    for candidate in candidates:
+        if candidate and candidate.strip():
+            return candidate.strip()
+    return None
+
+
+def require_genai_api_key(api_key: Optional[str] = None) -> str:
+    """Return a configured backend Gemini API key or raise a clear error."""
+    resolved = resolve_genai_api_key(api_key)
+    if resolved:
+        return resolved
+
+    raise RuntimeError(
+        "Backend AI credentials are not configured. Set GOOGLE_API_KEY or GEMINI_API_KEY on the server."
+    )
+
+
+def create_genai_client(api_key: Optional[str] = None) -> Client:
+    """Create a google.genai client with an explicit server-side API key."""
+    return Client(
+        api_key=require_genai_api_key(api_key),
+        http_options={"api_version": "v1"},
+    )
 
 
 async def capture_page_screenshot(url: str) -> Dict[str, Any]:
@@ -97,11 +138,7 @@ async def verify_claim_against_screenshot(
     Used by the batch verification pipeline in main.py.
     """
     try:
-        client = (
-            Client(api_key=api_key, http_options={"api_version": "v1"})
-            if api_key
-            else Client(http_options={"api_version": "v1"})
-        )
+        client = create_genai_client(api_key)
         prompt = (
             f"Analyze this screenshot. Is the claim '{claim}' true or false? "
             f"Respond only with JSON: {{'verified': bool, 'confidence': float, 'explanation': str}}"
@@ -111,7 +148,7 @@ async def verify_claim_against_screenshot(
         for attempt in range(3):
             try:
                 response = await client.aio.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model=FAST_MODEL,
                     contents=[types.Part.from_bytes(data=img_bytes, mime_type="image/png"), prompt],
                 )
                 break
@@ -258,7 +295,7 @@ async def calculate_market_delta(
 ) -> Dict[str, Any]:
     """Identify exactly what changed between current and historical pricing/features."""
     try:
-        client = Client(api_key=api_key, http_options={"api_version": "v1"}) if api_key else Client(http_options={"api_version": "v1"})
+        client = create_genai_client(api_key)
         prompt = (
             "You are a market intelligence analyst. Compare CURRENT vs HISTORICAL data and "
             "identify exact changes in pricing, packaging, and features. Provide a concise JSON "
@@ -268,7 +305,7 @@ async def calculate_market_delta(
             "Respond ONLY with valid JSON."
         )
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model=FAST_MODEL,
             contents=prompt,
         )
         text = (response.text or "").strip()
@@ -339,9 +376,9 @@ Make it visually impressive but FAST TO SCAN. Sales reps have seconds, not minut
 Generate complete, valid HTML with embedded CSS and JavaScript for collapsible sections."""
 
     try:
-        client = Client(api_key=api_key, http_options={"api_version": "v1"}) if api_key else Client(http_options={"api_version": "v1"})
+        client = create_genai_client(api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash",
+            model=FAST_MODEL,
             contents=prompt,
         )
 
@@ -435,11 +472,11 @@ Colors:
 Generate a visually compelling infographic that sales reps can share with prospects."""
 
     try:
-        client = Client(api_key=api_key, http_options={"api_version": "v1"}) if api_key else Client(http_options={"api_version": "v1"})
+        client = create_genai_client(api_key)
         # Gemini 1.5 Flash is multimodal; request IMAGE modality. If image generation hits quota,
         # the API still returns text and we fall back to the text description below.
         response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash",
+            model=FAST_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_modalities=["TEXT", "IMAGE"]
@@ -553,14 +590,14 @@ Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
             filepath.write_bytes(img_bytes)
 
         # 5. Use Gemini 2.0 Flash (High-Precision Vision) to 'Read' the image — AGI-level analysis
-        client = Client(api_key=api_key, http_options={"api_version": "v1"}) if api_key else Client(http_options={"api_version": "v1"})
+        client = create_genai_client(api_key)
         prompt = f"Analyze this screenshot. Is the claim '{claim}' true or false? Respond only with JSON: {{'verified': bool, 'confidence': float, 'explanation': str}}"
         await asyncio.sleep(min(2 ** 0 + 2, 10))  # Exponential backoff base
         response = None
         for attempt in range(3):
             try:
                 response = await client.aio.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model=FAST_MODEL,
                     contents=[types.Part.from_bytes(data=img_bytes, mime_type="image/png"), prompt]
                 )
                 break
@@ -601,11 +638,7 @@ async def generate_closing_email(
     with a 5-second sleep between attempts.
     """
     try:
-        client = (
-            Client(api_key=api_key, http_options={"api_version": "v1"})
-            if api_key
-            else Client(http_options={"api_version": "v1"})
-        )
+        client = create_genai_client(api_key)
 
         # Resolve the exact proof filename the rep should reference
         proof_filename = (
@@ -678,7 +711,7 @@ Output ONLY the Subject and Body. Nothing else."""
         for attempt in range(3):
             try:
                 response = await client.aio.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model=FAST_MODEL,
                     contents=prompt,
                 )
                 email_text = (response.text or "").strip()
@@ -1224,11 +1257,7 @@ Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
         logger.warning("All %d scrapes failed for '%s' — falling back to Gemini Grounded Search", len(all_configs), competitor_name)
         try:
             from google.genai import types as _gtypes
-            _fb_client = (
-                Client(api_key=api_key, http_options={"api_version": "v1"})
-                if api_key
-                else Client(http_options={"api_version": "v1"})
-            )
+            _fb_client = create_genai_client(api_key)
             _fb_prompt = (
                 f"Search the internet for recent complaints, outages, negative reviews, "
                 f"and user frustrations about {competitor_name}. "
@@ -1244,7 +1273,7 @@ Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
             for _fb_attempt in range(2):
                 try:
                     _fb_response = await _fb_client.aio.models.generate_content(
-                        model="gemini-2.0-flash",
+                        model=FAST_MODEL,
                         contents=_fb_prompt,
                         config=_gtypes.GenerateContentConfig(
                             tools=[_gtypes.Tool(google_search=_gtypes.GoogleSearch())],
@@ -1330,16 +1359,12 @@ RULES:
 - "killer_insight" should be the strongest competitive ammunition found."""
 
     try:
-        client = (
-            Client(api_key=api_key, http_options={"api_version": "v1"})
-            if api_key
-            else Client(http_options={"api_version": "v1"})
-        )
+        client = create_genai_client(api_key)
         response = None
         for attempt in range(3):
             try:
                 response = await client.aio.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model=FAST_MODEL,
                     contents=extraction_prompt,
                 )
                 break
@@ -1408,7 +1433,7 @@ RULES:
                 for attempt in range(3):
                     try:
                         p2_response = await client.aio.models.generate_content(
-                            model="gemini-2.0-flash",
+                            model=FAST_MODEL,
                             contents=threat_prompt,
                         )
                         break
@@ -1690,13 +1715,9 @@ Respond with ONLY valid JSON (no markdown fences):
 If nothing is found, return empty arrays and has_actionable_claim: false."""
 
     try:
-        client = (
-            Client(api_key=api_key, http_options={"api_version": "v1"})
-            if api_key
-            else Client(http_options={"api_version": "v1"})
-        )
+        client = create_genai_client(api_key)
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model=FAST_MODEL,
             contents=classification_prompt,
         )
         text = (response.text or "").strip()
