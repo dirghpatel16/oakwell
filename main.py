@@ -26,6 +26,11 @@ try:
 except ImportError:
     _firestore_mod = None  # type: ignore[assignment]
 
+try:
+    from google.cloud.firestore_v1.base_query import FieldFilter as _FieldFilter
+except ImportError:
+    _FieldFilter = None  # type: ignore[assignment]
+
 import tools
 
 # ---------------------------------------------------------------------------
@@ -78,6 +83,29 @@ def _require_durable_memory() -> None:
     raise PersistenceUnavailableError(
         "Durable memory is unavailable. Fix Firestore connectivity before running production analysis."
     )
+
+
+def _owner_scope_filtered_query(collection: str, owner_scope: str) -> Any:
+    """Build a Firestore query filtered by owner scope, compatible across SDK versions."""
+    if _firestore_db is None:
+        raise PersistenceUnavailableError("Firestore is unavailable.")
+
+    collection_ref = _firestore_db.collection(collection)
+    if _FieldFilter is not None:
+        return collection_ref.where(filter=_FieldFilter("owner_scope", "==", owner_scope))
+    return collection_ref.where("owner_scope", "==", owner_scope)
+
+
+def _require_scope_memory_query_ready(owner_scope: str) -> None:
+    """Validate that owner-scoped memory reads are operational, not just boot-initialized."""
+    _require_durable_memory()
+    try:
+        query = _owner_scope_filtered_query(FIRESTORE_COLLECTION, owner_scope)
+        list(query.limit(1).stream())
+    except Exception as exc:
+        raise PersistenceUnavailableError(
+            f"Durable memory query failed for scope {owner_scope}: {exc}"
+        ) from exc
 
 # ---------------------------------------------------------------------------
 # Firestore client  (project: gen-lang-client-0830900967)
@@ -328,7 +356,7 @@ def _load_memory(owner_scope: str) -> Dict[str, Any]:
     )
     if _firestore_db is not None:
         try:
-            docs = _firestore_db.collection(FIRESTORE_COLLECTION).where("owner_scope", "==", owner_scope).stream()
+            docs = _owner_scope_filtered_query(FIRESTORE_COLLECTION, owner_scope).stream()
             memory: Dict[str, Any] = {}
             for doc in docs:
                 data = doc.to_dict()
@@ -668,7 +696,7 @@ def _get_analysis_runs(owner_scope: str, competitor_url: Optional[str] = None, l
 
     if _firestore_db is not None:
         try:
-            docs = _firestore_db.collection(FIRESTORE_RUNS_COLLECTION).where("owner_scope", "==", owner_scope).stream()
+            docs = _owner_scope_filtered_query(FIRESTORE_RUNS_COLLECTION, owner_scope).stream()
             for doc in docs:
                 record = doc.to_dict()
                 if competitor_url and record.get("competitor_url") != competitor_url:
@@ -969,9 +997,12 @@ def _get_winning_patterns(owner_scope: str, competitor_url: Optional[str] = None
 
     if _firestore_db is not None:
         try:
-            query = _firestore_db.collection(FIRESTORE_OUTCOMES_COLLECTION).where("owner_scope", "==", owner_scope)
+            query = _owner_scope_filtered_query(FIRESTORE_OUTCOMES_COLLECTION, owner_scope)
             if competitor_url:
-                query = query.where("competitor_url", "==", competitor_url)
+                if _FieldFilter is not None:
+                    query = query.where(filter=_FieldFilter("competitor_url", "==", competitor_url))
+                else:
+                    query = query.where("competitor_url", "==", competitor_url)
             query = query.order_by("recorded_at", direction=_firestore_mod.Query.DESCENDING).limit(limit)
             for doc in query.stream():
                 outcomes.append(doc.to_dict())
@@ -2279,7 +2310,7 @@ async def analyze_deal(
     """Enqueue deal analysis. Returns job_id immediately; poll GET /deal-status/{job_id} for results."""
     _enforce_rate_limit(request, auth_ctx.scope_id, "analyze-deal", limit=6, window_seconds=300)
     try:
-        _require_durable_memory()
+        _require_scope_memory_query_ready(auth_ctx.scope_id)
     except PersistenceUnavailableError as exc:
         logger.error(
             "Rejecting analysis for scope=%s because durable memory is unavailable (%s)",
