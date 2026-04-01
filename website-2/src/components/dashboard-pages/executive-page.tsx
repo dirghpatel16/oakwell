@@ -24,6 +24,7 @@ import {
   Activity,
 } from "lucide-react";
 import { useMemory, useWinningPatterns } from "@/lib/hooks";
+import { DashboardErrorBanner } from "@/components/dashboard-state";
 
 const CHART_COLORS = ["#ef4444", "#f97316", "#3b82f6", "#8b5cf6", "#22c55e", "#eab308"];
 
@@ -45,7 +46,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 export default function ExecutivePortalPage() {
-  const { data: memory, loading: memLoading } = useMemory();
+  const { data: memory, loading: memLoading, error: memError, refresh: refreshMemory } = useMemory();
   const { data: patterns, loading: patLoading } = useWinningPatterns();
 
   const loading = memLoading || patLoading;
@@ -143,6 +144,15 @@ export default function ExecutivePortalPage() {
           </button>
         </div>
       </div>
+
+      {memError ? (
+        <DashboardErrorBanner
+          title="Executive portal memory is degraded"
+          message={`${memError}. Board-level metrics only count durable Oakwell intelligence, so this screen will not mask a storage failure as empty data.`}
+          actionLabel="Retry"
+          onAction={refreshMemory}
+        />
+      ) : null}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <ExecMetric icon={<Target className="w-4 h-4 text-blue-400" />} title="Competitors" value={String(metrics?.total || 0)} change={`${metrics?.highRisk || 0} high-risk`} positive={(metrics?.highRisk || 0) === 0} subtitle="Under active monitoring" />

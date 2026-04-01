@@ -43,6 +43,41 @@ RATE_LIMIT_WINDOW_SECONDS = 60
 jobs: Dict[str, Dict[str, Any]] = {}
 logger = logging.getLogger("oakwell-api")
 rate_limit_buckets: Dict[str, List[float]] = {}
+ALLOW_EPHEMERAL_MEMORY_FALLBACK = os.environ.get("OAKWELL_ALLOW_EPHEMERAL_MEMORY_FALLBACK") == "1"
+_firestore_status_reason = ""
+
+
+class PersistenceUnavailableError(RuntimeError):
+    """Raised when Oakwell cannot access durable memory in the current environment."""
+
+
+def _persistence_status() -> Dict[str, Any]:
+    """Return the current backend persistence posture without leaking secrets."""
+    if _firestore_db is not None:
+        return {
+            "firestore_ready": True,
+            "durable_memory_ready": True,
+            "persistence_backend": "firestore",
+            "persistence_reason": "",
+        }
+
+    reason = _firestore_status_reason or "Firestore is unavailable."
+    return {
+        "firestore_ready": False,
+        "durable_memory_ready": False,
+        "persistence_backend": "ephemeral_json" if ALLOW_EPHEMERAL_MEMORY_FALLBACK else "unavailable",
+        "persistence_reason": reason,
+    }
+
+
+def _require_durable_memory() -> None:
+    """Fail fast when Oakwell cannot reach a durable memory backend."""
+    status = _persistence_status()
+    if status["durable_memory_ready"]:
+        return
+    raise PersistenceUnavailableError(
+        "Durable memory is unavailable. Fix Firestore connectivity before running production analysis."
+    )
 
 # ---------------------------------------------------------------------------
 # Firestore client  (project: gen-lang-client-0830900967)
@@ -50,6 +85,7 @@ rate_limit_buckets: Dict[str, List[float]] = {}
 
 FIRESTORE_PROJECT = "gen-lang-client-0830900967"
 FIRESTORE_COLLECTION = "oakwell_deals"
+FIRESTORE_RUNS_COLLECTION = "oakwell_analysis_runs"
 
 _firestore_db: Optional[Any] = None  # google.cloud.firestore.Client or None
 
@@ -63,12 +99,12 @@ if _firestore_mod is not None:
             FIRESTORE_PROJECT, FIRESTORE_COLLECTION, len(_ping),
         )
     except Exception as _fs_err:
-        logger.warning("Firestore init/ping failed — falling back to memory.json: %s", _fs_err)
+        _firestore_status_reason = f"Firestore init/ping failed: {_fs_err}"
+        logger.warning("%s", _firestore_status_reason)
         _firestore_db = None
 else:
-    logger.warning(
-        "google-cloud-firestore not installed — falling back to local memory.json"
-    )
+    _firestore_status_reason = "google-cloud-firestore is not installed."
+    logger.warning("%s", _firestore_status_reason)
 
 if tools.resolve_genai_api_key():
     logger.info("Gemini API key detected in backend environment")
@@ -248,10 +284,19 @@ def _require_owned_job(job_id: str, auth_ctx: AuthContext) -> Dict[str, Any]:
     return job
 
 
+def _http_503_from_persistence(exc: PersistenceUnavailableError) -> HTTPException:
+    return HTTPException(status_code=503, detail=str(exc))
+
+
 def _can_access_proof(filename: str, auth_ctx: AuthContext) -> bool:
     if not filename:
         return False
-    memory = _load_memory(auth_ctx.scope_id)
+    try:
+        memory = _load_memory(auth_ctx.scope_id)
+    except PersistenceUnavailableError as exc:
+        logger.warning("Proof access falling back to in-memory jobs because persistence is unavailable: %s", exc)
+        memory = {}
+
     for entry in memory.values():
         proof_files = entry.get("proof_filenames", [])
         if isinstance(proof_files, list) and filename in proof_files:
@@ -274,6 +319,13 @@ def _load_memory(owner_scope: str) -> Dict[str, Any]:
     Firestore path: stream docs from oakwell_deals collection filtered to the owner scope.
     Fallback: read outputs/memory.json.
     """
+    status = _persistence_status()
+    logger.info(
+        "Loading memory for scope=%s via backend=%s durable=%s",
+        owner_scope,
+        status["persistence_backend"],
+        status["durable_memory_ready"],
+    )
     if _firestore_db is not None:
         try:
             docs = _firestore_db.collection(FIRESTORE_COLLECTION).where("owner_scope", "==", owner_scope).stream()
@@ -285,7 +337,16 @@ def _load_memory(owner_scope: str) -> Dict[str, Any]:
                 memory[url] = data
             return memory
         except Exception as exc:
+            if not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+                raise PersistenceUnavailableError(
+                    f"Durable memory read failed for scope {owner_scope}: {exc}"
+                ) from exc
             logger.warning("Firestore _load_memory failed, falling back to JSON: %s", exc)
+
+    if not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+        raise PersistenceUnavailableError(
+            "Durable memory is unavailable. Firestore must be healthy for production memory reads."
+        )
 
     # ── Fallback: local JSON ──
     if not MEMORY_FILE.exists():
@@ -325,9 +386,320 @@ def _load_memory_for_url(url: str, owner_scope: str) -> Dict[str, Any]:
                 return data
             return {}
         except Exception as exc:
+            if not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+                raise PersistenceUnavailableError(
+                    f"Durable memory read failed for scope {owner_scope}, url {url}: {exc}"
+                ) from exc
             logger.warning("Firestore _load_memory_for_url failed: %s", exc)
+    elif not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+        raise PersistenceUnavailableError(
+            "Durable memory is unavailable. Firestore must be healthy for production record reads."
+        )
     # fallback
     return _load_memory(owner_scope).get(url, {})
+
+
+def _evidence_source_type(source: str) -> str:
+    lowered = (source or "").lower()
+    if "reddit" in lowered:
+        return "reddit"
+    if "g2" in lowered:
+        return "review_site"
+    if "trustradius" in lowered or "capterra" in lowered:
+        return "review_site"
+    if lowered in ("x", "twitter") or "x/" in lowered or "twitter" in lowered:
+        return "social"
+    if "glassdoor" in lowered or "blind" in lowered:
+        return "talent_signal"
+    if "greenhouse" in lowered or "linkedin" in lowered:
+        return "hiring_signal"
+    if "sec" in lowered or "investor" in lowered:
+        return "investor_signal"
+    if "blog" in lowered or "news" in lowered or "press" in lowered:
+        return "news"
+    return "market_signal"
+
+
+def _severity_confidence(severity: str) -> float:
+    lowered = (severity or "").lower()
+    if lowered == "high":
+        return 0.82
+    if lowered == "medium":
+        return 0.68
+    if lowered == "low":
+        return 0.55
+    return 0.5
+
+
+def _build_evidence_items(
+    competitor_url: str,
+    analysis_mode: str,
+    verification_reason: Optional[str],
+    visual_proof_results: List[Dict[str, Any]],
+    deep_sentiment: Dict[str, Any],
+    drift_report: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Normalize analysis evidence into durable, UI-friendly evidence items."""
+    captured_at = datetime.now(timezone.utc).isoformat()
+    items: List[Dict[str, Any]] = []
+    seen: set[Tuple[str, str, str]] = set()
+
+    def append_item(item: Dict[str, Any]) -> None:
+        key = (
+            str(item.get("source_type", "")),
+            str(item.get("title", "")),
+            str(item.get("summary", ""))[:180],
+        )
+        if key in seen:
+            return
+        seen.add(key)
+        items.append(item)
+
+    if analysis_mode == "strategy_only":
+        append_item(
+            {
+                "id": f"strategy-{uuid.uuid4().hex[:8]}",
+                "source_type": "internal_deal_context",
+                "source_label": "Deal Context",
+                "title": "Strategy-only routing",
+                "summary": verification_reason
+                or "Oakwell returned a strategic brief because the transcript did not contain public claims worth verifying.",
+                "verdict": "strategy_brief",
+                "confidence_score": 0.6,
+                "captured_at": captured_at,
+                "source_url": None,
+                "artifact_path": None,
+                "claim": None,
+                "freshness": "fresh",
+                "trust_level": "medium",
+            }
+        )
+
+    for idx, proof in enumerate(visual_proof_results):
+        claim = str(proof.get("claim") or "").strip()
+        explanation = str(proof.get("explanation") or "").strip()
+        artifact_path = proof.get("proof_artifact_path")
+        status = str(proof.get("status") or "").lower()
+        verified = bool(proof.get("verified"))
+        verdict = (
+            "verified"
+            if verified
+            else "disproven"
+            if status in ("success", "cached", "partial_success")
+            else "unverified"
+        )
+        append_item(
+            {
+                "id": f"proof-{idx}-{uuid.uuid4().hex[:6]}",
+                "source_type": "company_website",
+                "source_label": "Company Website",
+                "title": claim or f"Live website proof #{idx + 1}",
+                "summary": explanation
+                or "Oakwell captured live competitor proof and attached it to this analysis.",
+                "verdict": verdict,
+                "confidence_score": float(proof.get("confidence_score") or 0.0),
+                "captured_at": captured_at,
+                "source_url": competitor_url,
+                "artifact_path": os.path.basename(str(artifact_path)) if artifact_path else None,
+                "claim": claim or None,
+                "freshness": "fresh",
+                "trust_level": "high",
+            }
+        )
+
+    for complaint in deep_sentiment.get("recent_complaints", []) or []:
+        if not isinstance(complaint, dict):
+            continue
+        source = str(complaint.get("source") or "Market Signal")
+        summary = str(complaint.get("summary") or "").strip()
+        severity = str(complaint.get("severity") or "medium")
+        if not summary:
+            continue
+        append_item(
+            {
+                "id": f"complaint-{uuid.uuid4().hex[:8]}",
+                "source_type": _evidence_source_type(source),
+                "source_label": source,
+                "title": "Customer complaint signal",
+                "summary": summary,
+                "verdict": "negative_signal",
+                "confidence_score": _severity_confidence(severity),
+                "captured_at": captured_at,
+                "source_url": None,
+                "artifact_path": None,
+                "claim": None,
+                "freshness": "recent",
+                "trust_level": "medium",
+            }
+        )
+
+    for frustration in deep_sentiment.get("feature_frustrations", []) or []:
+        if not isinstance(frustration, dict):
+            continue
+        source = str(frustration.get("source") or "Market Signal")
+        feature = str(frustration.get("feature") or "Feature gap").strip()
+        complaint = str(frustration.get("complaint") or "").strip()
+        if not complaint:
+            continue
+        append_item(
+            {
+                "id": f"frustration-{uuid.uuid4().hex[:8]}",
+                "source_type": _evidence_source_type(source),
+                "source_label": source,
+                "title": feature or "Feature frustration",
+                "summary": complaint,
+                "verdict": "feature_gap",
+                "confidence_score": 0.64,
+                "captured_at": captured_at,
+                "source_url": None,
+                "artifact_path": None,
+                "claim": None,
+                "freshness": "recent",
+                "trust_level": "medium",
+            }
+        )
+
+    for alert in drift_report.get("alerts", []) or []:
+        if not isinstance(alert, str) or not alert.strip():
+            continue
+        append_item(
+            {
+                "id": f"drift-{uuid.uuid4().hex[:8]}",
+                "source_type": "market_drift",
+                "source_label": "Market Drift",
+                "title": "Competitor change detected",
+                "summary": alert.strip(),
+                "verdict": "change_detected",
+                "confidence_score": 0.7,
+                "captured_at": captured_at,
+                "source_url": competitor_url,
+                "artifact_path": None,
+                "claim": None,
+                "freshness": "fresh",
+                "trust_level": "high",
+            }
+        )
+
+    killer_insight = str(deep_sentiment.get("killer_insight") or "").strip()
+    if killer_insight:
+        append_item(
+            {
+                "id": f"insight-{uuid.uuid4().hex[:8]}",
+                "source_type": "market_signal",
+                "source_label": "Market Synthesis",
+                "title": "Highest-signal market finding",
+                "summary": killer_insight,
+                "verdict": "synthesis",
+                "confidence_score": 0.66,
+                "captured_at": captured_at,
+                "source_url": None,
+                "artifact_path": None,
+                "claim": None,
+                "freshness": "recent",
+                "trust_level": "medium",
+            }
+        )
+
+    return items[:12]
+
+
+def _build_source_coverage(evidence_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Summarize which source categories informed a given analysis run."""
+    coverage: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for item in evidence_items:
+        source_type = str(item.get("source_type") or "unknown")
+        source_label = str(item.get("source_label") or source_type.replace("_", " ").title())
+        key = (source_type, source_label)
+        if key not in coverage:
+            coverage[key] = {
+                "source_type": source_type,
+                "source_label": source_label,
+                "item_count": 0,
+                "trust_level": item.get("trust_level") or "medium",
+            }
+        coverage[key]["item_count"] += 1
+    return sorted(
+        coverage.values(),
+        key=lambda entry: (-int(entry.get("item_count", 0)), str(entry.get("source_label", ""))),
+    )
+
+
+def _persist_analysis_run(owner_scope: str, run_data: Dict[str, Any]) -> str:
+    """Persist an immutable analysis run for auditability and UI trust."""
+    run_id = str(run_data.get("analysis_run_id") or uuid.uuid4())
+    record = dict(run_data)
+    record["analysis_run_id"] = run_id
+    record["owner_scope"] = owner_scope
+
+    if _firestore_db is not None:
+        try:
+            _firestore_db.collection(FIRESTORE_RUNS_COLLECTION).document(run_id).set(record)
+            logger.info("Analysis run persisted for scope=%s run_id=%s", owner_scope, run_id)
+            return run_id
+        except Exception as exc:
+            if not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+                raise PersistenceUnavailableError(
+                    f"Durable analysis run write failed for scope {owner_scope}, run {run_id}: {exc}"
+                ) from exc
+            logger.warning("Firestore analysis run save failed, falling back to JSON: %s", exc)
+
+    if not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+        raise PersistenceUnavailableError(
+            "Durable memory is unavailable. Firestore must be healthy for production analysis run writes."
+        )
+
+    runs_file = OUTPUTS_DIR / "analysis_runs.json"
+    existing: List[Dict[str, Any]] = []
+    if runs_file.exists():
+        try:
+            loaded = json.loads(runs_file.read_text(encoding="utf-8"))
+            if isinstance(loaded, list):
+                existing = loaded
+        except (json.JSONDecodeError, OSError):
+            existing = []
+    existing.append(record)
+    runs_file.write_text(json.dumps(existing, indent=2, default=str), encoding="utf-8")
+    return run_id
+
+
+def _get_analysis_runs(owner_scope: str, competitor_url: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
+    """Load recent immutable analysis runs for trust/audit surfaces."""
+    runs: List[Dict[str, Any]] = []
+
+    if _firestore_db is not None:
+        try:
+            docs = _firestore_db.collection(FIRESTORE_RUNS_COLLECTION).where("owner_scope", "==", owner_scope).stream()
+            for doc in docs:
+                record = doc.to_dict()
+                if competitor_url and record.get("competitor_url") != competitor_url:
+                    continue
+                runs.append(record)
+        except Exception as exc:
+            if not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+                raise PersistenceUnavailableError(
+                    f"Durable analysis run read failed for scope {owner_scope}: {exc}"
+                ) from exc
+            logger.warning("Firestore analysis run query failed: %s", exc)
+
+    if not runs and ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+        runs_file = OUTPUTS_DIR / "analysis_runs.json"
+        if runs_file.exists():
+            try:
+                loaded = json.loads(runs_file.read_text(encoding="utf-8"))
+                if isinstance(loaded, list):
+                    for record in loaded:
+                        if not isinstance(record, dict):
+                            continue
+                        if record.get("owner_scope") != owner_scope:
+                            continue
+                        if competitor_url and record.get("competitor_url") != competitor_url:
+                            continue
+                        runs.append(record)
+            except (json.JSONDecodeError, OSError):
+                runs = []
+
+    runs.sort(key=lambda run: str(run.get("created_at") or ""), reverse=True)
+    return runs[: max(1, min(limit, 25))]
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +825,16 @@ def _update_memory(url: str, new_data: Dict[str, Any], owner_scope: str) -> None
             logger.info("Firestore SET (merge) OK for %s (doc %s)", url, doc_id)
             return
         except Exception as exc:
+            if not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+                raise PersistenceUnavailableError(
+                    f"Durable memory write failed for scope {owner_scope}, url {url}: {exc}"
+                ) from exc
             logger.warning("Firestore _update_memory failed, falling back to JSON: %s", exc)
+
+    if not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+        raise PersistenceUnavailableError(
+            "Durable memory is unavailable. Firestore must be healthy for production writes."
+        )
 
     # ── Fallback: local JSON ──
     memory: Dict[str, Any] = {}
@@ -550,7 +931,16 @@ def _record_deal_outcome(
             logger.info("Outcome recorded: %s for %s (value=%s)", outcome, competitor_url, deal_value)
             return {"status": "saved", "doc_id": doc_ref.id}
         except Exception as exc:
+            if not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+                raise PersistenceUnavailableError(
+                    f"Durable outcome write failed for scope {owner_scope}, url {competitor_url}: {exc}"
+                ) from exc
             logger.warning("Firestore outcome save failed: %s", exc)
+
+    if not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+        raise PersistenceUnavailableError(
+            "Durable memory is unavailable. Firestore must be healthy for production outcome writes."
+        )
 
     # Fallback: append to a local JSON file
     outcomes_file = OUTPUTS_DIR / "outcomes.json"
@@ -586,10 +976,14 @@ def _get_winning_patterns(owner_scope: str, competitor_url: Optional[str] = None
             for doc in query.stream():
                 outcomes.append(doc.to_dict())
         except Exception as exc:
+            if not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+                raise PersistenceUnavailableError(
+                    f"Durable outcome read failed for scope {owner_scope}: {exc}"
+                ) from exc
             logger.warning("Firestore winning patterns query failed: %s", exc)
 
     # Fallback: local JSON
-    if not outcomes:
+    if not outcomes and ALLOW_EPHEMERAL_MEMORY_FALLBACK:
         outcomes_file = OUTPUTS_DIR / "outcomes.json"
         if outcomes_file.exists():
             try:
@@ -1697,6 +2091,8 @@ async def run_oakwell_analysis(
 
         # 10) Build a visual proof summary for memory persistence
         _set_progress(job_id, "Persisting to Neural Memory…")
+        analysis_completed_at = datetime.now(timezone.utc).isoformat()
+        new_score = result.get("deal_health_score", 0)
         visual_proof_summary = [
             {
                 "claim": v.get("claim"),
@@ -1708,11 +2104,53 @@ async def run_oakwell_analysis(
             for v in visual_proof_results
             if v.get("proof_artifact_path")
         ]
+        evidence_items = _build_evidence_items(
+            competitor_url=competitor_url,
+            analysis_mode=analysis_mode,
+            verification_reason=verification_reason,
+            visual_proof_results=visual_proof_results,
+            deep_sentiment=deep_sentiment,
+            drift_report=drift_report,
+        )
+        source_coverage = _build_source_coverage(evidence_items)
+
+        analysis_run_id = _persist_analysis_run(
+            owner_scope,
+            {
+                "analysis_run_id": str(uuid.uuid4()),
+                "created_at": analysis_completed_at,
+                "competitor_url": competitor_url,
+                "competitor_name": competitor_name,
+                "your_product": your_product,
+                "deal_stage": deal_stage,
+                "deal_value": deal_value,
+                "analysis_mode": analysis_mode,
+                "evidence_status": evidence_status,
+                "evidence_summary": evidence_summary,
+                "verification_reason": verification_reason,
+                "deal_health_score": new_score,
+                "score_reasoning": result.get("score_reasoning", ""),
+                "risk_level": result.get("risk_level", ""),
+                "claim_count": claim_count,
+                "verified_claim_count": verified_claim_count,
+                "proof_filenames": proof_artifacts,
+                "proof_available": proof_available,
+                "talk_track": result.get("talk_track", ""),
+                "clashes_detected": result.get("clashes_detected", clashes_detected),
+                "market_drift": drift_report if drift_report.get("drift_detected") else None,
+                "visual_proof_summary": visual_proof_summary,
+                "deep_sentiment": deep_sentiment,
+                "adversarial_critique": adversarial_critique,
+                "winning_patterns_summary": result.get("winning_patterns_summary", {}),
+                "key_pivot_points": result.get("key_pivot_points", []),
+                "stage_specific_actions": result.get("stage_specific_actions", []),
+                "evidence_items": evidence_items,
+                "source_coverage": source_coverage,
+            },
+        )
 
         # 11) Update Neural Memory — save_deal() delegates to _update_memory
         #     which handles score_history, timeline, and analysis_count merging.
-        new_score = result.get("deal_health_score", 0)
-
         save_deal({
             "competitor_url": competitor_url,
             "deal_health_score": new_score,
@@ -1728,6 +2166,10 @@ async def run_oakwell_analysis(
             "verification_reason": verification_reason,
             "claim_count": claim_count,
             "verified_claim_count": verified_claim_count,
+            "analysis_run_id": analysis_run_id,
+            "analysis_completed_at": analysis_completed_at,
+            "evidence_items": evidence_items,
+            "source_coverage": source_coverage,
         }, owner_scope)
 
         # Read back the merged data for the job result
@@ -1768,6 +2210,10 @@ async def run_oakwell_analysis(
             "claim_count": claim_count,
             "verified_claim_count": verified_claim_count,
             "proof_available": proof_available,
+            "analysis_run_id": analysis_run_id,
+            "analysis_completed_at": analysis_completed_at,
+            "evidence_items": evidence_items,
+            "source_coverage": source_coverage,
         }
 
         # ── Autonomous Slack Alert — fire on critical risk ──
@@ -1833,9 +2279,23 @@ async def analyze_deal(
     """Enqueue deal analysis. Returns job_id immediately; poll GET /deal-status/{job_id} for results."""
     _enforce_rate_limit(request, auth_ctx.scope_id, "analyze-deal", limit=6, window_seconds=300)
     try:
+        _require_durable_memory()
+    except PersistenceUnavailableError as exc:
+        logger.error(
+            "Rejecting analysis for scope=%s because durable memory is unavailable (%s)",
+            auth_ctx.scope_id,
+            _persistence_status()["persistence_backend"],
+        )
+        raise _http_503_from_persistence(exc) from exc
+    try:
         api_key = tools.require_genai_api_key()
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    logger.info(
+        "Analyze request accepted for scope=%s via persistence backend=%s",
+        auth_ctx.scope_id,
+        _persistence_status()["persistence_backend"],
+    )
     job_id = str(uuid.uuid4())
     jobs[job_id] = {
         "status": "pending",
@@ -2090,8 +2550,14 @@ async def get_proof(filename: str, auth_ctx: AuthContext = Depends(_require_auth
     return FileResponse(filepath, media_type="image/png")
 
 @app.get("/health")
-async def health() -> Dict[str, str]:
-    return {"status": "ok"}
+async def health() -> Dict[str, Any]:
+    persistence = _persistence_status()
+    return {
+        "status": "ok",
+        "persistence_ready": persistence["durable_memory_ready"],
+        "persistence_backend": persistence["persistence_backend"],
+        "persistence_reason": persistence["persistence_reason"] or None,
+    }
 
 
 @app.get("/sentinel-status")
@@ -2112,7 +2578,31 @@ async def sentinel_status(auth_ctx: AuthContext = Depends(_require_auth_context)
 @app.get("/memory")
 async def get_memory(auth_ctx: AuthContext = Depends(_require_auth_context)) -> Dict[str, Any]:
     """Return the entire memory bank for UI insights."""
-    return _load_memory(auth_ctx.scope_id)
+    try:
+        persistence = _persistence_status()
+        logger.info(
+            "Memory request for scope=%s via backend=%s durable=%s",
+            auth_ctx.scope_id,
+            persistence["persistence_backend"],
+            persistence["durable_memory_ready"],
+        )
+        return _load_memory(auth_ctx.scope_id)
+    except PersistenceUnavailableError as exc:
+        raise _http_503_from_persistence(exc) from exc
+
+
+@app.get("/analysis-runs")
+async def analysis_runs(
+    url: Optional[str] = None,
+    limit: int = 8,
+    auth_ctx: AuthContext = Depends(_require_auth_context),
+) -> Dict[str, Any]:
+    """Return immutable analysis runs for auditability and dashboard trust."""
+    try:
+        runs = _get_analysis_runs(auth_ctx.scope_id, competitor_url=url, limit=limit)
+    except PersistenceUnavailableError as exc:
+        raise _http_503_from_persistence(exc) from exc
+    return {"runs": runs}
 
 
 @app.get("/competitor-trend")
@@ -2121,7 +2611,10 @@ async def competitor_trend(url: str, auth_ctx: AuthContext = Depends(_require_au
 
     Uses get_history() to query the last 5 deals from Firestore.
     """
-    history = get_history(url, auth_ctx.scope_id, limit=5)
+    try:
+        history = get_history(url, auth_ctx.scope_id, limit=5)
+    except PersistenceUnavailableError as exc:
+        raise _http_503_from_persistence(exc) from exc
     return {
         "url": url,
         "trend": history["trend"],
@@ -2140,7 +2633,10 @@ async def executive_summary(job_id: str, auth_ctx: AuthContext = Depends(_requir
         raise HTTPException(status_code=409, detail="Job not completed yet")
     result = j.get("result", {})
     comp_url = result.get("competitor_url", "")
-    memory_data = _load_memory_for_url(comp_url, auth_ctx.scope_id) if comp_url else None
+    try:
+        memory_data = _load_memory_for_url(comp_url, auth_ctx.scope_id) if comp_url else None
+    except PersistenceUnavailableError as exc:
+        raise _http_503_from_persistence(exc) from exc
     summary_md = tools.generate_executive_summary(result, memory_data=memory_data)
     return {"markdown": summary_md}
 
@@ -2159,14 +2655,17 @@ async def record_outcome(
     _enforce_rate_limit(request, auth_ctx.scope_id, "record-outcome", limit=20, window_seconds=300)
     if req.outcome not in ("won", "lost", "stalled"):
         raise HTTPException(status_code=400, detail="outcome must be: won | lost | stalled")
-    result = _record_deal_outcome(
-        competitor_url=req.competitor_url,
-        owner_scope=auth_ctx.scope_id,
-        outcome=req.outcome,
-        deal_value=req.deal_value,
-        deal_stage=req.deal_stage,
-        reason=req.reason,
-    )
+    try:
+        result = _record_deal_outcome(
+            competitor_url=req.competitor_url,
+            owner_scope=auth_ctx.scope_id,
+            outcome=req.outcome,
+            deal_value=req.deal_value,
+            deal_stage=req.deal_stage,
+            reason=req.reason,
+        )
+    except PersistenceUnavailableError as exc:
+        raise _http_503_from_persistence(exc) from exc
     return result
 
 
@@ -2176,7 +2675,10 @@ async def winning_patterns_endpoint(
     auth_ctx: AuthContext = Depends(_require_auth_context),
 ) -> Dict[str, Any]:
     """Return winning patterns learned from past deal outcomes."""
-    return _get_winning_patterns(auth_ctx.scope_id, competitor_url=url)
+    try:
+        return _get_winning_patterns(auth_ctx.scope_id, competitor_url=url)
+    except PersistenceUnavailableError as exc:
+        raise _http_503_from_persistence(exc) from exc
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { useMemory } from "@/lib/hooks";
 import { useDashboardSurface } from "@/components/dashboard-shell";
-import { DashboardEmptyState, DashboardLoadingState } from "@/components/dashboard-state";
+import { DashboardEmptyState, DashboardErrorBanner, DashboardLoadingState } from "@/components/dashboard-state";
 
 type AlertSeverity = "critical" | "high" | "medium" | "low";
 
@@ -31,7 +31,7 @@ interface Alert {
 
 export default function ThreatIntelPage() {
   const [filter, setFilter] = useState<"all" | AlertSeverity>("all");
-  const { data: memory, loading: memLoading } = useMemory();
+  const { data: memory, loading: memLoading, error: memError, refresh: refreshMemory } = useMemory();
   const { basePath, isDemoSurface } = useDashboardSurface();
 
   const alerts: Alert[] = useMemo(() => {
@@ -123,6 +123,15 @@ export default function ThreatIntelPage() {
         ))}
         <span className="text-[10px] text-zinc-600 font-mono ml-2">{filtered.length} alerts</span>
       </div>
+
+      {memError ? (
+        <DashboardErrorBanner
+          title="Threat feed could not load durable memory"
+          message={`${memError}. Oakwell will only populate Threat Intelligence from confirmed backend memory.`}
+          actionLabel="Retry"
+          onAction={refreshMemory}
+        />
+      ) : null}
 
       {memLoading ? (
         <DashboardLoadingState

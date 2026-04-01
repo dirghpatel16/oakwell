@@ -27,6 +27,10 @@ export interface MemoryEntry {
   verification_reason?: string;
   claim_count?: number;
   verified_claim_count?: number;
+  analysis_run_id?: string;
+  analysis_completed_at?: string;
+  evidence_items?: EvidenceItem[];
+  source_coverage?: SourceCoverageItem[];
   deep_sentiment?: Record<string, unknown>;
   [key: string]: unknown;
 }
@@ -37,6 +41,58 @@ export interface SentinelStatus {
   watched_urls: number;
   interval_seconds: number;
   registry: Record<string, string[]>;
+}
+
+export interface HealthStatus {
+  status: string;
+  persistence_ready?: boolean;
+  persistence_backend?: string;
+  persistence_reason?: string | null;
+}
+
+export interface EvidenceItem {
+  id: string;
+  source_type: string;
+  source_label: string;
+  title: string;
+  summary: string;
+  verdict: string;
+  confidence_score: number;
+  captured_at: string | null;
+  source_url?: string;
+  artifact_path?: string;
+  claim?: string;
+  freshness?: string;
+  trust_level?: string;
+}
+
+export interface SourceCoverageItem {
+  source_type: string;
+  source_label: string;
+  item_count: number;
+  trust_level?: string;
+}
+
+export interface AnalysisRun {
+  analysis_run_id: string;
+  created_at: string | null;
+  competitor_url: string;
+  competitor_name?: string;
+  deal_health_score: number;
+  analysis_mode?: string;
+  evidence_status?: string;
+  evidence_summary?: string;
+  verification_reason?: string;
+  claim_count?: number;
+  verified_claim_count?: number;
+  proof_filenames: string[];
+  proof_available?: boolean;
+  score_reasoning?: string;
+  risk_level?: string;
+  deal_stage?: string;
+  deal_value?: number;
+  evidence_items: EvidenceItem[];
+  source_coverage: SourceCoverageItem[];
 }
 
 export interface WinningPatterns {
@@ -105,6 +161,10 @@ export interface DealResult {
   claim_count?: number;
   verified_claim_count?: number;
   proof_available?: boolean;
+  analysis_run_id?: string;
+  analysis_completed_at?: string;
+  evidence_items?: EvidenceItem[];
+  source_coverage?: SourceCoverageItem[];
 }
 
 export interface LiveSnippetRequest {
@@ -252,7 +312,83 @@ function normalizeMemoryEntry(value: unknown): MemoryEntry {
       typeof entry.verified_claim_count === "number"
         ? entry.verified_claim_count
         : undefined,
+    analysis_run_id: asString(entry.analysis_run_id) || undefined,
+    analysis_completed_at: asString(entry.analysis_completed_at) || undefined,
+    evidence_items: normalizeEvidenceItems(entry.evidence_items),
+    source_coverage: normalizeSourceCoverage(entry.source_coverage),
     deep_sentiment: isRecord(entry.deep_sentiment) ? entry.deep_sentiment : undefined,
+  };
+}
+
+function normalizeEvidenceItem(value: unknown): EvidenceItem | null {
+  if (!isRecord(value)) return null;
+  return {
+    id: asString(value.id) || cryptoRandomId(),
+    source_type: asString(value.source_type) || "unknown",
+    source_label: asString(value.source_label) || "Unknown",
+    title: asString(value.title) || "Evidence item",
+    summary: asString(value.summary),
+    verdict: asString(value.verdict) || "unknown",
+    confidence_score: typeof value.confidence_score === "number" ? value.confidence_score : 0,
+    captured_at: asString(value.captured_at) || null,
+    source_url: asString(value.source_url) || undefined,
+    artifact_path: asString(value.artifact_path) || undefined,
+    claim: asString(value.claim) || undefined,
+    freshness: asString(value.freshness) || undefined,
+    trust_level: asString(value.trust_level) || undefined,
+  };
+}
+
+function normalizeEvidenceItems(value: unknown): EvidenceItem[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => normalizeEvidenceItem(item))
+    .filter((item): item is EvidenceItem => item !== null);
+}
+
+function normalizeSourceCoverageItem(value: unknown): SourceCoverageItem | null {
+  if (!isRecord(value)) return null;
+  return {
+    source_type: asString(value.source_type) || "unknown",
+    source_label: asString(value.source_label) || "Unknown",
+    item_count: typeof value.item_count === "number" ? value.item_count : 0,
+    trust_level: asString(value.trust_level) || undefined,
+  };
+}
+
+function normalizeSourceCoverage(value: unknown): SourceCoverageItem[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => normalizeSourceCoverageItem(item))
+    .filter((item): item is SourceCoverageItem => item !== null);
+}
+
+function normalizeAnalysisRun(value: unknown): AnalysisRun | null {
+  if (!isRecord(value)) return null;
+  return {
+    analysis_run_id: asString(value.analysis_run_id) || cryptoRandomId(),
+    created_at: asString(value.created_at) || null,
+    competitor_url: asString(value.competitor_url),
+    competitor_name: asString(value.competitor_name) || undefined,
+    deal_health_score: typeof value.deal_health_score === "number" ? value.deal_health_score : 0,
+    analysis_mode: asString(value.analysis_mode) || undefined,
+    evidence_status: asString(value.evidence_status) || undefined,
+    evidence_summary: summarizeUnknown(value.evidence_summary) || undefined,
+    verification_reason: asString(value.verification_reason) || undefined,
+    claim_count: typeof value.claim_count === "number" ? value.claim_count : undefined,
+    verified_claim_count:
+      typeof value.verified_claim_count === "number" ? value.verified_claim_count : undefined,
+    proof_filenames: Array.isArray(value.proof_filenames)
+      ? value.proof_filenames.filter((item): item is string => typeof item === "string")
+      : [],
+    proof_available:
+      typeof value.proof_available === "boolean" ? value.proof_available : undefined,
+    score_reasoning: asString(value.score_reasoning) || undefined,
+    risk_level: asString(value.risk_level) || undefined,
+    deal_stage: asString(value.deal_stage) || undefined,
+    deal_value: typeof value.deal_value === "number" ? value.deal_value : undefined,
+    evidence_items: normalizeEvidenceItems(value.evidence_items),
+    source_coverage: normalizeSourceCoverage(value.source_coverage),
   };
 }
 
@@ -304,7 +440,15 @@ function normalizeDealResult(value: unknown): DealResult {
       typeof result.proof_available === "boolean"
         ? result.proof_available
         : undefined,
+    analysis_run_id: asString(result.analysis_run_id) || undefined,
+    analysis_completed_at: asString(result.analysis_completed_at) || undefined,
+    evidence_items: normalizeEvidenceItems(result.evidence_items),
+    source_coverage: normalizeSourceCoverage(result.source_coverage),
   };
+}
+
+function cryptoRandomId(): string {
+  return Math.random().toString(36).slice(2, 10);
 }
 
 // ---------------------------------------------------------------------------
@@ -334,7 +478,20 @@ async function request<T>(
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "Unknown error");
-    throw new ApiError(text, res.status);
+    let message = text;
+
+    try {
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      if (typeof parsed.detail === "string" && parsed.detail.trim()) {
+        message = parsed.detail;
+      } else if (typeof parsed.error === "string" && parsed.error.trim()) {
+        message = parsed.error;
+      }
+    } catch {
+      // Preserve the original text response when it is not JSON.
+    }
+
+    throw new ApiError(message, res.status);
   }
   return res.json() as Promise<T>;
 }
@@ -352,13 +509,24 @@ export async function getMemory(): Promise<MemoryBank> {
 }
 
 /** Health check */
-export async function getHealth(): Promise<{ status: string }> {
-  return request<{ status: string }>("/health");
+export async function getHealth(): Promise<HealthStatus> {
+  return request<HealthStatus>("/health");
 }
 
 /** Autonomous sentinel status */
 export async function getSentinelStatus(): Promise<SentinelStatus> {
   return request<SentinelStatus>("/sentinel-status");
+}
+
+/** Immutable analysis runs for a competitor */
+export async function getAnalysisRuns(url: string, limit = 8): Promise<AnalysisRun[]> {
+  const query = `?url=${encodeURIComponent(url)}&limit=${encodeURIComponent(String(limit))}`;
+  const payload = await request<{ runs?: unknown[] }>(`/analysis-runs${query}`);
+  return Array.isArray(payload.runs)
+    ? payload.runs
+        .map((run) => normalizeAnalysisRun(run))
+        .filter((run): run is AnalysisRun => run !== null)
+    : [];
 }
 
 /** Winning/losing patterns (optionally filtered by competitor URL) */
