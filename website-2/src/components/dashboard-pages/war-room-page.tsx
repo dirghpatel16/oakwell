@@ -103,8 +103,8 @@ export default function WarRoomPage() {
 
       {memError ? (
         <DashboardErrorBanner
-          title="Oakwell engine connection issue"
-          message={`${memError}. The dashboard will keep any cached intelligence in view while you retry.`}
+          title="Oakwell memory bank is unavailable"
+          message={`${memError}. The War Room only reflects durable backend memory, so Oakwell is surfacing the storage issue instead of showing a misleading reset.`}
           actionLabel="Retry"
           onAction={refreshMemory}
         />
