@@ -111,11 +111,15 @@ export default function DealDeskPage() {
   }, [jobStatus, refreshMemory]);
 
   useEffect(() => {
+    const completedJobResult =
+      jobStatus?.status === "completed" ? jobStatus.result : null;
     if (
       !pendingPersistenceJobId ||
-      jobStatus?.status !== "completed" ||
+      !completedJobResult ||
+      !jobStatus ||
+      jobStatus.status !== "completed" ||
       jobStatus.job_id !== pendingPersistenceJobId ||
-      !jobStatus.result?.competitor_url
+      !completedJobResult.competitor_url
     ) {
       return;
     }
@@ -132,10 +136,10 @@ export default function DealDeskPage() {
       return;
     }
 
-    const persistedEntry = memory?.[jobStatus.result.competitor_url];
+    const persistedEntry = memory?.[completedJobResult.competitor_url];
     if (persistedEntry) {
       queueMicrotask(() => {
-        setSelectedUrl(jobStatus.result.competitor_url);
+        setSelectedUrl(completedJobResult.competitor_url);
         setPersistenceIssue(null);
         setPendingPersistenceJobId(null);
       });
