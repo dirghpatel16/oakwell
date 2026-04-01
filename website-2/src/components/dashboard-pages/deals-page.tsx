@@ -65,7 +65,7 @@ export default function DealDeskPage() {
     : deals;
 
   const selectedDeal = selectedUrl ? deals.find((d) => d.url === selectedUrl) : null;
-  const result = jobStatus?.result;
+  const completedResult = jobStatus?.status === "completed" ? jobStatus.result : null;
 
   useEffect(() => {
     if (jobStatus?.status !== "completed" || !jobStatus.job_id) return;
@@ -314,98 +314,98 @@ export default function DealDeskPage() {
           </div>
         )}
 
-        {result && !showForm && (
+        {completedResult && !showForm && (
           <div className="p-6 space-y-6 max-w-3xl">
             <div className="flex items-start justify-between">
               <div>
                 <h2 className="text-xl font-semibold text-white mb-1">Analysis Complete</h2>
-                <p className="text-sm text-zinc-500">{result.competitor_url}</p>
+                <p className="text-sm text-zinc-500">{completedResult.competitor_url}</p>
               </div>
               <div className="text-right">
                 <div className={`text-3xl font-mono font-bold ${
-                  result.deal_health_score >= 70 ? "text-green-400" :
-                  result.deal_health_score >= 40 ? "text-yellow-400" : "text-red-400"
-                }`}>{result.deal_health_score}/100</div>
+                  completedResult.deal_health_score >= 70 ? "text-green-400" :
+                  completedResult.deal_health_score >= 40 ? "text-yellow-400" : "text-red-400"
+                }`}>{completedResult.deal_health_score}/100</div>
                 <div className="text-xs text-zinc-500">Health Score</div>
               </div>
             </div>
 
-            {result.risk_level && (
+            {completedResult.risk_level && (
               <div className={`px-4 py-3 rounded-lg border text-sm ${
-                result.risk_level === "HIGH" ? "bg-red-500/10 border-red-500/20 text-red-400" :
-                result.risk_level === "MEDIUM" ? "bg-yellow-500/10 border-yellow-500/20 text-yellow-400" :
+                completedResult.risk_level === "HIGH" ? "bg-red-500/10 border-red-500/20 text-red-400" :
+                completedResult.risk_level === "MEDIUM" ? "bg-yellow-500/10 border-yellow-500/20 text-yellow-400" :
                 "bg-green-500/10 border-green-500/20 text-green-400"
               }`}>
-                Risk Level: {result.risk_level}
-                {result.score_reasoning && <span className="text-zinc-400 ml-2">— {result.score_reasoning}</span>}
+                Risk Level: {completedResult.risk_level}
+                {completedResult.score_reasoning && <span className="text-zinc-400 ml-2">— {completedResult.score_reasoning}</span>}
               </div>
             )}
 
             <EvidenceStateCard
-              analysisMode={result.analysis_mode}
-              evidenceStatus={result.evidence_status}
-              evidenceSummary={result.evidence_summary}
-              verificationReason={result.verification_reason}
-              claimCount={result.claim_count}
-              verifiedClaimCount={result.verified_claim_count}
-              proofAvailable={result.proof_available || result.all_proof_filenames.length > 0}
+              analysisMode={completedResult.analysis_mode}
+              evidenceStatus={completedResult.evidence_status}
+              evidenceSummary={completedResult.evidence_summary}
+              verificationReason={completedResult.verification_reason}
+              claimCount={completedResult.claim_count}
+              verifiedClaimCount={completedResult.verified_claim_count}
+              proofAvailable={completedResult.proof_available || completedResult.all_proof_filenames.length > 0}
             />
 
             <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Clashes Detected</h4>
-              <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{result.clashes_detected}</p>
+              <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{completedResult.clashes_detected}</p>
             </div>
 
             <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4">
               <div className="flex items-center justify-between mb-2">
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-blue-400">Talk Track</h4>
-                <button onClick={() => copyToClipboard(result.talk_track)} className="text-xs text-zinc-500 hover:text-white flex items-center gap-1">
+                <button onClick={() => copyToClipboard(completedResult.talk_track)} className="text-xs text-zinc-500 hover:text-white flex items-center gap-1">
                   {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />} {copied ? "Copied" : "Copy"}
                 </button>
               </div>
-              <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{result.talk_track}</p>
+              <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{completedResult.talk_track}</p>
             </div>
 
-            {result.adversarial_critique && (
+            {completedResult.adversarial_critique && (
               <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4">
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-orange-400 mb-2">Adversarial Critique</h4>
-                <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{result.adversarial_critique}</p>
+                <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{completedResult.adversarial_critique}</p>
               </div>
             )}
 
-            {result.key_pivot_points && result.key_pivot_points.length > 0 && (
+            {completedResult.key_pivot_points && completedResult.key_pivot_points.length > 0 && (
               <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4">
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-green-400 mb-2">Key Pivot Points</h4>
                 <ul className="space-y-1.5">
-                  {result.key_pivot_points.map((pt, i) => (
+                  {completedResult.key_pivot_points.map((pt, i) => (
                     <li key={i} className="text-sm text-zinc-300 flex gap-2"><span className="text-green-500">→</span> {pt}</li>
                   ))}
                 </ul>
               </div>
             )}
 
-            {result.stage_specific_actions && result.stage_specific_actions.length > 0 && (
+            {completedResult.stage_specific_actions && completedResult.stage_specific_actions.length > 0 && (
               <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4">
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-purple-400 mb-2">
-                  Actions for {result.deal_stage} Stage
+                  Actions for {completedResult.deal_stage} Stage
                 </h4>
                 <ul className="space-y-1.5">
-                  {result.stage_specific_actions.map((act, i) => (
+                  {completedResult.stage_specific_actions.map((act, i) => (
                     <li key={i} className="text-sm text-zinc-300 flex gap-2"><span className="text-purple-400">•</span> {act}</li>
                   ))}
                 </ul>
               </div>
             )}
 
-            {result.market_drift && (
+            {completedResult.market_drift && (
               <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4">
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-amber-400 mb-2">Market Drift</h4>
-                <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{result.market_drift}</p>
+                <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{completedResult.market_drift}</p>
               </div>
             )}
 
-            {result.all_proof_filenames.length > 0 && (
-              <ProofArtifactsCard filenames={result.all_proof_filenames} isDemo={isDemo} />
+            {completedResult.all_proof_filenames.length > 0 && (
+              <ProofArtifactsCard filenames={completedResult.all_proof_filenames} isDemo={isDemo} />
             )}
 
             <div className="flex gap-3">
@@ -439,7 +439,7 @@ export default function DealDeskPage() {
           </div>
         )}
 
-        {selectedDeal && !result && !showForm && (
+        {selectedDeal && !completedResult && !showForm && (
           <div className="p-6 space-y-6 max-w-3xl">
             <div className="flex items-start justify-between">
               <div>
@@ -520,7 +520,7 @@ export default function DealDeskPage() {
           </div>
         )}
 
-        {!showForm && !result && !selectedDeal && (
+        {!showForm && !completedResult && !selectedDeal && (
           <div className="flex flex-col items-center justify-center h-full text-center px-8 space-y-4">
             <div className="w-16 h-16 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center">
               <Activity className="w-7 h-7 text-zinc-600" />

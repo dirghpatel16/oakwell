@@ -42,6 +42,7 @@
 - **Env Templates**: `.env.example` and `website-2/.env.example` are now the safe templates for required secrets. Do not document real values in code or docs.
 - **Clerk Auth**: Ensure `/demo` routes remain public in `middleware.ts` if adding more sub-pages.
 - **Local Auth Fallback**: `src/app/layout.tsx` still bypasses `ClerkProvider` when the publishable key is missing so `/demo` can render locally, but `src/middleware.ts` now blocks `/dashboard` when Clerk is not configured.
+- **Preview Deploy Build Drift**: If Vercel still reports the older `activeDeal is possibly null/undefined` TypeScript error, confirm the preview deployment is on the commit that includes the `completedResult` null-safe Deal Desk update and redeploy that commit.
 - **API Models**: We are absorbing costs (Model A), so never re-introduce `X-Google-API-Key` headers in the frontend.
 
 ## Success condition
