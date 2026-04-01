@@ -1,5 +1,50 @@
 # Recent Changes
 
+## 2026-04-01
+### Summary
+Fixed Oakwell’s “memory disappears after a day” production trust gap. The backend now treats Firestore as the required durable memory backend for production instead of silently falling back to `outputs/memory.json`, and the dashboard now refuses to present transient job results as if they were durably saved analyses.
+
+### Files touched
+- `main.py`: Added a persistence status layer, exposed persistence readiness on `/health`, blocked production analysis when durable memory is unavailable, and restricted JSON fallback to explicit local/dev opt-in via `OAKWELL_ALLOW_EPHEMERAL_MEMORY_FALLBACK=1`.
+- `.env.example`: Added `OAKWELL_ALLOW_EPHEMERAL_MEMORY_FALLBACK=0` as the documented default.
+- `website-2/src/lib/api.ts`: Improved error parsing so dashboard failures show clean backend details instead of raw JSON strings.
+- `website-2/src/components/dashboard-pages/deals-page.tsx`: Added durable-memory confirmation after analysis completion and a clear persistence failure state instead of treating transient job results as saved truth.
+- `website-2/src/components/dashboard-pages/war-room-page.tsx`
+- `website-2/src/components/dashboard-pages/alerts-page.tsx`
+- `website-2/src/components/dashboard-pages/forecast-page.tsx`
+- `website-2/src/components/dashboard-pages/executive-page.tsx`
+- `docs/handoffs/current-state.md`
+- `docs/handoffs/next-session.md`
+- `docs/known-issues.md`
+
+### Why
+Oakwell’s backend could silently degrade from Firestore into instance-local JSON on Cloud Run. That made the product look persistent in-session but lose analyses across restarts or the next day. The UI also masked this by rendering transient completed-job state even if the memory bank never reloaded the saved record. That combination made Oakwell feel untrustworthy.
+
+### Risks / follow-ups
+- **Follow-up**: Cloud Run must be redeployed with the new persistence gate, and production should keep `OAKWELL_ALLOW_EPHEMERAL_MEMORY_FALLBACK=0`.
+- **Follow-up**: The next trust upgrade should add immutable `analysis_runs` plus structured `evidence_items` / `claims` storage so Oakwell’s moat is evidence quality, not just transcript summarization.
+- **Follow-up**: The current watcher still depends on Firestore-backed memory being healthy; once persistence is verified in production, the next step is broadening evidence retrieval without reintroducing silent fallbacks.
+
+## 2026-04-01
+### Summary
+Upgraded Oakwell from a latest-result dashboard into a more auditable evidence system. Every completed analysis now writes an immutable `analysis_runs` snapshot with normalized `evidence_items` and `source_coverage`, and Deal Desk can surface those records as a source ledger plus recent-run history.
+
+### Files touched
+- `main.py`: Added immutable analysis-run persistence, normalized evidence item generation, source-coverage summaries, and a new authenticated `/analysis-runs` endpoint.
+- `website-2/src/lib/api.ts`: Added normalization for `analysis_run_id`, `analysis_completed_at`, `evidence_items`, `source_coverage`, and immutable analysis-run payloads.
+- `website-2/src/lib/hooks.ts`: Added `useAnalysisRuns` and aligned `useHealth` with the richer health contract.
+- `website-2/src/components/dashboard-pages/deals-page.tsx`: Added source coverage rendering, expandable evidence ledger cards, and immutable run history cards.
+- `docs/handoffs/current-state.md`
+- `docs/handoffs/next-session.md`
+
+### Why
+The persistence fix made Oakwell honest, but it still needed to feel like a system with memory and provenance. These changes make the product easier to trust because users can now inspect what sources informed an analysis and see that prior analyses exist as durable records instead of only the latest rollup state.
+
+### Risks / follow-ups
+- **Follow-up**: Cloud Run and Vercel must be redeployed before the live product can use the new `analysis_runs` / evidence contract.
+- **Follow-up**: The current evidence ledger is still built from a single-URL proof path plus market-search findings; the next moat step is multi-page retrieval and claim-to-evidence linkage.
+- **Follow-up**: The immutable run store is now in place, but the broader dashboard still primarily consumes the latest rollup. Additional pages should start reading run/evidence data intentionally.
+
 ## 2026-03-26
 ### Summary
 Hardened Oakwell for a public-repo / pre-production security posture. The browser no longer calls FastAPI directly; authenticated dashboard requests now flow through a same-origin Next.js proxy route, and the backend requires a shared internal secret plus forwarded authenticated user context. Persisted data, jobs, proof files, and win/loss analytics are now owner-scoped to prevent IDOR.

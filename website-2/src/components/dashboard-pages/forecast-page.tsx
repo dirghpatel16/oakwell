@@ -16,6 +16,7 @@ import {
 } from "recharts";
 import { TrendingDown, ArrowUpRight, Loader2 } from "lucide-react";
 import { useMemory, useWinningPatterns } from "@/lib/hooks";
+import { DashboardErrorBanner } from "@/components/dashboard-state";
 
 const CHART_COLORS = ["#ef4444", "#f97316", "#3b82f6", "#8b5cf6", "#22c55e", "#eab308"];
 
@@ -37,7 +38,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 export default function ForecastPage() {
-  const { data: memory, loading: memLoading } = useMemory();
+  const { data: memory, loading: memLoading, error: memError, refresh: refreshMemory } = useMemory();
   const { data: patterns, loading: patLoading } = useWinningPatterns();
 
   const loading = memLoading || patLoading;
@@ -129,6 +130,15 @@ export default function ForecastPage() {
           </span>
         </div>
       </div>
+
+      {memError ? (
+        <DashboardErrorBanner
+          title="Forecast cannot trust memory right now"
+          message={`${memError}. Forecast metrics only render from durable Oakwell memory, not transient session state.`}
+          actionLabel="Retry"
+          onAction={refreshMemory}
+        />
+      ) : null}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <MetricCard title="Competitors Tracked" value={String(metrics.total)} subtitle={`${metrics.riskCount} at risk`} trend={metrics.riskCount === 0 ? "Clean" : `${metrics.riskCount} flagged`} trendType={metrics.riskCount === 0 ? "good" : "bad"} />

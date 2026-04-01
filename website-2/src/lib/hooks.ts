@@ -25,6 +25,7 @@ import type {
   LiveSnippetResponse,
   CompetitorTrend,
   JobStatus,
+  AnalysisRun,
 } from "./api";
 
 // ---------------------------------------------------------------------------
@@ -151,10 +152,22 @@ export function useCompetitorTrend(url: string) {
   );
 }
 
+/** Immutable recent analysis runs for a competitor */
+export function useAnalysisRuns(url?: string, refreshInterval = 60_000) {
+  const { isDemo } = useDemoMode();
+  const shouldBypass = isDemo || !url;
+  return useQuery<AnalysisRun[]>(
+    () => (url ? api.getAnalysisRuns(url) : Promise.resolve([])),
+    [url, isDemo],
+    shouldBypass ? undefined : refreshInterval,
+    shouldBypass ? [] : undefined
+  );
+}
+
 /** Health check */
 export function useHealth(refreshInterval = 15_000) {
   const { isDemo } = useDemoMode();
-  return useQuery<{ status: string }>(
+  return useQuery<api.HealthStatus>(
     () => api.getHealth(),
     [isDemo],
     refreshInterval,

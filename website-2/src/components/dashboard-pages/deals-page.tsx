@@ -11,15 +11,20 @@ import {
   Check,
   FileText,
   ShieldCheck,
+  Database,
+  Clock3,
+  ExternalLink,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
-import { useMemory, useDealAnalysis, useEmailGeneration } from "@/lib/hooks";
+import { useMemory, useDealAnalysis, useEmailGeneration, useAnalysisRuns } from "@/lib/hooks";
 import { useWebSocket } from "@/lib/websocket-context";
 import { useDemoMode } from "@/lib/demo-context";
 import { getProofUrl } from "@/lib/api";
 import { DashboardEmptyState, DashboardErrorBanner, DashboardLoadingState } from "@/components/dashboard-state";
 
 export default function DealDeskPage() {
-  const { data: memory, loading: memLoading, refresh: refreshMemory } = useMemory();
+  const { data: memory, loading: memLoading, error: memError, refresh: refreshMemory } = useMemory();
   const { analyze, jobStatus, isRunning, error: analysisError, reset } = useDealAnalysis();
   const { email, loading: emailLoading, generate: generateEmail } = useEmailGeneration();
   const { triggerDealAnalysis } = useWebSocket();
@@ -36,6 +41,8 @@ export default function DealDeskPage() {
   const [selectedUrl, setSelectedUrl] = useState<string | null>(null);
   const [filterText, setFilterText] = useState("");
   const [copied, setCopied] = useState(false);
+  const [pendingPersistenceJobId, setPendingPersistenceJobId] = useState<string | null>(null);
+  const [persistenceIssue, setPersistenceIssue] = useState<string | null>(null);
 
   const deals = useMemo(() => {
     if (!memory) return [];
@@ -57,6 +64,10 @@ export default function DealDeskPage() {
       verificationReason: entry.verification_reason,
       claimCount: entry.claim_count,
       verifiedClaimCount: entry.verified_claim_count,
+      evidenceItems: entry.evidence_items || [],
+      sourceCoverage: entry.source_coverage || [],
+      analysisRunId: entry.analysis_run_id,
+      analysisCompletedAt: entry.analysis_completed_at,
     }));
   }, [memory]);
 
@@ -66,17 +77,87 @@ export default function DealDeskPage() {
 
   const selectedDeal = selectedUrl ? deals.find((d) => d.url === selectedUrl) : null;
   const completedResult = jobStatus?.status === "completed" ? jobStatus.result : null;
+  const persistedCompletedDeal = completedResult?.competitor_url
+    ? deals.find((deal) => deal.url === completedResult.competitor_url)
+    : null;
+  const activeDeal = persistedCompletedDeal ?? selectedDeal;
+  const analysisRunsUrl = activeDeal?.url;
+  const {
+    data: analysisRuns,
+    loading: runsLoading,
+    error: runsError,
+    refresh: refreshRuns,
+  } = useAnalysisRuns(analysisRunsUrl);
+  const completionPersistencePending =
+    Boolean(completedResult) &&
+    Boolean(jobStatus?.job_id) &&
+    pendingPersistenceJobId === jobStatus?.job_id;
+  const validatingPersistence =
+    completionPersistencePending && memLoading && !persistedCompletedDeal && !memError;
+  const canGenerateCompletionEmail =
+    Boolean(jobStatus?.job_id) &&
+    activeDeal?.url === completedResult?.competitor_url;
 
   useEffect(() => {
     if (jobStatus?.status !== "completed" || !jobStatus.job_id) return;
     if (lastCompletedJobRef.current === jobStatus.job_id) return;
 
     lastCompletedJobRef.current = jobStatus.job_id;
-    refreshMemory();
+    queueMicrotask(() => {
+      setPendingPersistenceJobId(jobStatus.job_id);
+      setPersistenceIssue(null);
+      refreshMemory();
+    });
   }, [jobStatus, refreshMemory]);
+
+  useEffect(() => {
+    const completedJobResult =
+      jobStatus?.status === "completed" ? jobStatus.result : null;
+    if (
+      !pendingPersistenceJobId ||
+      !completedJobResult ||
+      !jobStatus ||
+      jobStatus.status !== "completed" ||
+      jobStatus.job_id !== pendingPersistenceJobId ||
+      !completedJobResult.competitor_url
+    ) {
+      return;
+    }
+
+    if (memLoading) return;
+
+    if (memError) {
+      queueMicrotask(() => {
+        setPersistenceIssue(
+          `Oakwell completed the analysis but could not reload durable memory. ${memError}`
+        );
+        setPendingPersistenceJobId(null);
+      });
+      return;
+    }
+
+    const persistedEntry = memory?.[completedJobResult.competitor_url];
+    if (persistedEntry) {
+      queueMicrotask(() => {
+        setSelectedUrl(completedJobResult.competitor_url);
+        setPersistenceIssue(null);
+        setPendingPersistenceJobId(null);
+      });
+      return;
+    }
+
+    queueMicrotask(() => {
+      setPersistenceIssue(
+        "Oakwell completed the analysis, but the record was not confirmed in durable memory. This result has not been treated as saved."
+      );
+      setPendingPersistenceJobId(null);
+    });
+  }, [pendingPersistenceJobId, jobStatus, memLoading, memError, memory]);
 
   const handleAnalyze = async () => {
     if (!transcript || !competitorUrl) return;
+    setPersistenceIssue(null);
+    setPendingPersistenceJobId(null);
     triggerDealAnalysis(competitorName || competitorUrl);
     await analyze({
       transcript,
@@ -139,6 +220,15 @@ export default function DealDeskPage() {
                 icon={Loader2}
                 title="Loading deal memory"
                 message="Pulling competitor records, score history, and proof artifacts from the Oakwell memory bank."
+              />
+            </div>
+          ) : memError && deals.length === 0 ? (
+            <div className="p-4">
+              <DashboardErrorBanner
+                title="Memory bank unavailable"
+                message={`${memError}. Oakwell is refusing to pretend local session data is durable memory.`}
+                actionLabel="Retry"
+                onAction={refreshMemory}
               />
             </div>
           ) : filtered.length === 0 ? (
@@ -314,7 +404,54 @@ export default function DealDeskPage() {
           </div>
         )}
 
-        {completedResult && !showForm && (
+        {completedResult && !showForm && validatingPersistence && (
+          <div className="p-6 max-w-3xl">
+            <DashboardLoadingState
+              icon={ShieldCheck}
+              title="Validating durable memory"
+              message="Oakwell finished the analysis. Confirming the record was written back to the memory bank before treating it as saved."
+            />
+          </div>
+        )}
+
+        {completedResult && !showForm && persistenceIssue && !persistedCompletedDeal && (
+          <div className="p-6 space-y-4 max-w-3xl">
+            <DashboardErrorBanner
+              title="Analysis completed but durable persistence failed"
+              message={persistenceIssue}
+              actionLabel="Retry Memory Sync"
+              onAction={refreshMemory}
+            />
+            <div className="rounded-2xl border border-zinc-800 bg-[#0a0a0a] px-6 py-8">
+              <h3 className="text-sm font-semibold text-white">Why Oakwell is stopping here</h3>
+              <p className="mt-2 text-sm leading-relaxed text-zinc-500">
+                Oakwell no longer treats transient job state as the source of truth. Once durable memory is healthy,
+                rerun the analysis or retry memory sync so the dashboard can trust the record across reloads and days.
+              </p>
+              <div className="mt-4 flex gap-3">
+                <button
+                  onClick={refreshMemory}
+                  className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-white"
+                >
+                  Retry Memory Sync
+                </button>
+                <button
+                  onClick={() => {
+                    setPersistenceIssue(null);
+                    setPendingPersistenceJobId(null);
+                    reset();
+                    setShowForm(true);
+                  }}
+                  className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-blue-500"
+                >
+                  Start New Analysis
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {completedResult && !persistedCompletedDeal && !showForm && !validatingPersistence && !persistenceIssue && (
           <div className="p-6 space-y-6 max-w-3xl">
             <div className="flex items-start justify-between">
               <div>
@@ -349,6 +486,13 @@ export default function DealDeskPage() {
               claimCount={completedResult.claim_count}
               verifiedClaimCount={completedResult.verified_claim_count}
               proofAvailable={completedResult.proof_available || completedResult.all_proof_filenames.length > 0}
+            />
+
+            <SourceCoverageCard coverage={completedResult.source_coverage || []} />
+
+            <EvidenceLedgerCard
+              items={completedResult.evidence_items || []}
+              isDemo={isDemo}
             />
 
             <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4">
@@ -439,60 +583,67 @@ export default function DealDeskPage() {
           </div>
         )}
 
-        {selectedDeal && !completedResult && !showForm && (
+        {activeDeal && (!completedResult || Boolean(persistedCompletedDeal)) && !showForm && (
           <div className="p-6 space-y-6 max-w-3xl">
             <div className="flex items-start justify-between">
               <div>
-                <h2 className="text-xl font-semibold text-white mb-1">{selectedDeal.name}</h2>
-                <p className="text-sm text-zinc-500">Last analyzed: {selectedDeal.lastContact} • {selectedDeal.analyses} analyses</p>
+                <h2 className="text-xl font-semibold text-white mb-1">{activeDeal.name}</h2>
+                <p className="text-sm text-zinc-500">Last analyzed: {activeDeal.lastContact} • {activeDeal.analyses} analyses</p>
               </div>
               <div className="text-right">
                 <div className={`text-3xl font-mono font-bold ${
-                  selectedDeal.score >= 70 ? "text-green-400" :
-                  selectedDeal.score >= 40 ? "text-yellow-400" : "text-red-400"
-                }`}>{selectedDeal.score}/100</div>
+                  activeDeal.score >= 70 ? "text-green-400" :
+                  activeDeal.score >= 40 ? "text-yellow-400" : "text-red-400"
+                }`}>{activeDeal.score}/100</div>
                 <div className="text-xs text-zinc-500">Health Score</div>
               </div>
             </div>
 
-            {selectedDeal.clashes && (
+            {activeDeal.clashes && (
               <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4">
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Clashes Detected</h4>
-                <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{selectedDeal.clashes}</p>
+                <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{activeDeal.clashes}</p>
               </div>
             )}
 
             <EvidenceStateCard
-              analysisMode={selectedDeal.analysisMode}
-              evidenceStatus={selectedDeal.evidenceStatus}
-              evidenceSummary={selectedDeal.evidenceSummary}
-              verificationReason={selectedDeal.verificationReason}
-              claimCount={selectedDeal.claimCount}
-              verifiedClaimCount={selectedDeal.verifiedClaimCount}
-              proofAvailable={selectedDeal.proofFiles.length > 0}
+              analysisMode={activeDeal.analysisMode}
+              evidenceStatus={activeDeal.evidenceStatus}
+              evidenceSummary={activeDeal.evidenceSummary}
+              verificationReason={activeDeal.verificationReason}
+              claimCount={activeDeal.claimCount}
+              verifiedClaimCount={activeDeal.verifiedClaimCount}
+              proofAvailable={activeDeal.proofFiles.length > 0}
             />
 
-            {selectedDeal.talkTrack && (
+            <SourceCoverageCard coverage={activeDeal.sourceCoverage || []} />
+
+            <EvidenceLedgerCard
+              items={activeDeal.evidenceItems || []}
+              isDemo={isDemo}
+            />
+
+            {activeDeal.talkTrack && (
               <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4">
                 <div className="flex items-center justify-between mb-2">
                   <h4 className="text-xs font-semibold uppercase tracking-wider text-blue-400">Talk Track</h4>
-                  <button onClick={() => copyToClipboard(selectedDeal.talkTrack)} className="text-xs text-zinc-500 hover:text-white flex items-center gap-1">
+                  <button onClick={() => copyToClipboard(activeDeal.talkTrack)} className="text-xs text-zinc-500 hover:text-white flex items-center gap-1">
                     <Copy className="w-3 h-3" /> Copy
                   </button>
                 </div>
-                <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{selectedDeal.talkTrack}</p>
+                <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{activeDeal.talkTrack}</p>
               </div>
             )}
 
-            {selectedDeal.proofFiles.length > 0 && (
-              <ProofArtifactsCard filenames={selectedDeal.proofFiles} isDemo={isDemo} />
+            {activeDeal.proofFiles.length > 0 && (
+              <ProofArtifactsCard filenames={activeDeal.proofFiles} isDemo={isDemo} />
             )}
 
-            {selectedDeal.scoreHistory.length > 1 && (
+            {activeDeal.scoreHistory.length > 1 && (
               <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4">
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Score Trend</h4>
                 <div className="flex items-end gap-1 h-16">
-                  {selectedDeal.scoreHistory.map((s, i) => (
+                  {activeDeal.scoreHistory.map((s, i) => (
                     <div
                       key={i}
                       className={`flex-1 rounded-t transition-all ${
@@ -506,17 +657,50 @@ export default function DealDeskPage() {
               </div>
             )}
 
-            <button
-              onClick={() => {
-                setCompetitorUrl(selectedDeal.url);
-                setCompetitorName(selectedDeal.name);
-                setShowForm(true);
-                setSelectedUrl(null);
-              }}
-              className="w-full bg-blue-600 hover:bg-blue-500 text-white py-2 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-2"
-            >
-              <Play className="w-3.5 h-3.5" /> Re-Analyze This Competitor
-            </button>
+            <RecentAnalysisRunsCard
+              runs={analysisRuns || []}
+              loading={runsLoading}
+              error={runsError}
+              onRetry={refreshRuns}
+            />
+
+            <div className="flex gap-3">
+              {canGenerateCompletionEmail ? (
+                <button
+                  onClick={handleGenerateEmail}
+                  disabled={emailLoading}
+                  className="flex-1 bg-white text-black hover:bg-zinc-200 transition-colors py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-2"
+                >
+                  {emailLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mail className="w-3.5 h-3.5" />}
+                  Generate Battlecard Email
+                </button>
+              ) : null}
+              <button
+                onClick={() => {
+                  setPersistenceIssue(null);
+                  setPendingPersistenceJobId(null);
+                  setCompetitorUrl(activeDeal.url);
+                  setCompetitorName(activeDeal.name);
+                  setShowForm(true);
+                  setSelectedUrl(null);
+                }}
+                className="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-2 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-2"
+              >
+                <Play className="w-3.5 h-3.5" /> Re-Analyze This Competitor
+              </button>
+            </div>
+
+            {email && canGenerateCompletionEmail && (
+              <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Generated Email</h4>
+                  <button onClick={() => copyToClipboard(email)} className="text-xs text-zinc-500 hover:text-white flex items-center gap-1">
+                    <Copy className="w-3 h-3" /> Copy
+                  </button>
+                </div>
+                <pre className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap font-sans">{email}</pre>
+              </div>
+            )}
           </div>
         )}
 
@@ -641,6 +825,146 @@ function EvidenceStateCard({
   );
 }
 
+function SourceCoverageCard({
+  coverage,
+}: {
+  coverage: { source_type: string; source_label: string; item_count: number; trust_level?: string }[];
+}) {
+  if (!coverage.length) return null;
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-[#0a0a0a] p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <Database className="h-4 w-4 text-cyan-400" />
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-cyan-400">Source Coverage</h4>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {coverage.map((source) => (
+          <span
+            key={`${source.source_type}-${source.source_label}`}
+            className="inline-flex items-center rounded-full border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-300"
+          >
+            {source.source_label} · {source.item_count}
+            {source.trust_level ? (
+              <span className="ml-2 text-[10px] uppercase tracking-wider text-zinc-500">
+                {source.trust_level}
+              </span>
+            ) : null}
+          </span>
+        ))}
+      </div>
+      <p className="mt-3 text-xs text-zinc-500">
+        Oakwell keeps the latest competitive rollup in memory, but the source mix above shows which public signals informed this view.
+      </p>
+    </div>
+  );
+}
+
+function EvidenceLedgerCard({
+  items,
+  isDemo,
+}: {
+  items: {
+    id: string;
+    source_label: string;
+    title: string;
+    summary: string;
+    verdict: string;
+    confidence_score: number;
+    captured_at: string | null;
+    source_url?: string;
+    artifact_path?: string;
+    claim?: string;
+    freshness?: string;
+    trust_level?: string;
+  }[];
+  isDemo: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (!items.length) return null;
+
+  const visibleItems = expanded ? items : items.slice(0, 3);
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-[#0a0a0a] p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4 text-emerald-400" />
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-emerald-400">Evidence Ledger</h4>
+        </div>
+        {items.length > 3 ? (
+          <button
+            onClick={() => setExpanded((value) => !value)}
+            className="inline-flex items-center gap-1 text-xs text-zinc-500 transition-colors hover:text-white"
+          >
+            {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            {expanded ? "Collapse" : `Show ${items.length - 3} more`}
+          </button>
+        ) : null}
+      </div>
+      <div className="mt-4 space-y-3">
+        {visibleItems.map((item) => (
+          <div key={item.id} className="rounded-xl border border-zinc-800 bg-zinc-950/80 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-zinc-800 bg-zinc-900 px-2 py-0.5 text-[10px] uppercase tracking-wider text-zinc-400">
+                {item.source_label}
+              </span>
+              <span className="rounded-full border border-zinc-800 bg-zinc-900 px-2 py-0.5 text-[10px] uppercase tracking-wider text-zinc-500">
+                {item.verdict.replace(/_/g, " ")}
+              </span>
+              {item.freshness ? (
+                <span className="rounded-full border border-zinc-800 bg-zinc-900 px-2 py-0.5 text-[10px] uppercase tracking-wider text-zinc-500">
+                  {item.freshness}
+                </span>
+              ) : null}
+            </div>
+            <h5 className="mt-3 text-sm font-medium text-white">{item.title}</h5>
+            {item.claim ? (
+              <p className="mt-1 text-xs text-blue-300">Claim: {item.claim}</p>
+            ) : null}
+            <p className="mt-2 text-sm leading-relaxed text-zinc-300">{item.summary}</p>
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-zinc-500">
+              {item.captured_at ? (
+                <span className="inline-flex items-center gap-1">
+                  <Clock3 className="h-3.5 w-3.5" />
+                  {timeAgo(item.captured_at)}
+                </span>
+              ) : null}
+              <span>Confidence {Math.round((item.confidence_score || 0) * 100)}%</span>
+              {item.trust_level ? <span>Trust {item.trust_level}</span> : null}
+              {!isDemo && item.artifact_path ? (
+                <a
+                  href={getProofUrl(item.artifact_path)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-emerald-300 transition-colors hover:text-emerald-200"
+                >
+                  Open proof
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              ) : null}
+              {item.source_url ? (
+                <a
+                  href={item.source_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-cyan-300 transition-colors hover:text-cyan-200"
+                >
+                  Source URL
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              ) : null}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 text-xs text-zinc-500">
+        Oakwell stores evidence separately from the final talk track so reps can inspect provenance without cluttering the main workflow.
+      </p>
+    </div>
+  );
+}
+
 function ProofArtifactsCard({ filenames, isDemo }: { filenames: string[]; isDemo: boolean }) {
   return (
     <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4">
@@ -698,6 +1022,83 @@ function ProofArtifactsCard({ filenames, isDemo }: { filenames: string[]; isDemo
         {isDemo
           ? "Demo mode shows deterministic proof artifact names so the surface remains polished and repeatable."
           : "These screenshots are the underlying evidence Oakwell captured while verifying competitor claims. Click any preview to inspect the full artifact."}
+      </p>
+    </div>
+  );
+}
+
+function RecentAnalysisRunsCard({
+  runs,
+  loading,
+  error,
+  onRetry,
+}: {
+  runs: {
+    analysis_run_id: string;
+    created_at: string | null;
+    deal_health_score: number;
+    analysis_mode?: string;
+    evidence_status?: string;
+    claim_count?: number;
+    verified_claim_count?: number;
+  }[];
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-[#0a0a0a] p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <Clock3 className="h-4 w-4 text-orange-400" />
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-orange-400">Recent Analysis Runs</h4>
+      </div>
+      {loading ? (
+        <p className="text-sm text-zinc-500">Loading immutable run history…</p>
+      ) : error ? (
+        <div className="space-y-3">
+          <p className="text-sm text-zinc-500">{error}</p>
+          <button
+            onClick={onRetry}
+            className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-white"
+          >
+            Retry
+          </button>
+        </div>
+      ) : !runs.length ? (
+        <p className="text-sm text-zinc-500">No immutable run history has been recorded for this competitor yet.</p>
+      ) : (
+        <div className="space-y-3">
+          {runs.slice(0, 5).map((run) => (
+            <div key={run.analysis_run_id} className="rounded-xl border border-zinc-800 bg-zinc-950/80 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-white">{run.deal_health_score}/100</p>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {run.created_at ? timeAgo(run.created_at) : "unknown"} · {run.analysis_mode === "strategy_only" ? "strategy-only" : "proof-backed"}
+                  </p>
+                </div>
+                <span className="rounded-full border border-zinc-800 bg-zinc-900 px-2 py-1 text-[10px] uppercase tracking-wider text-zinc-400">
+                  {run.evidence_status || "standard"}
+                </span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-zinc-500">
+                {typeof run.claim_count === "number" ? (
+                  <span className="rounded-full border border-zinc-800 bg-zinc-900 px-2 py-1">
+                    {run.claim_count} detected
+                  </span>
+                ) : null}
+                {typeof run.verified_claim_count === "number" ? (
+                  <span className="rounded-full border border-zinc-800 bg-zinc-900 px-2 py-1">
+                    {run.verified_claim_count} checked
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="mt-3 text-xs text-zinc-500">
+        Each run is stored as an immutable record so the memory bank can keep the latest rollup without losing auditability.
       </p>
     </div>
   );
