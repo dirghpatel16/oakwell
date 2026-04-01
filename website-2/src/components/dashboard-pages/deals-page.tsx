@@ -97,6 +97,10 @@ export default function DealDeskPage() {
   const canGenerateCompletionEmail =
     Boolean(jobStatus?.job_id) &&
     activeDeal?.url === completedResult?.competitor_url;
+  const memoryUnavailableForAnalysis = Boolean(memError);
+  const memoryUnavailableMessage = memError
+    ? `${memError}. Oakwell requires durable memory before starting a production analysis.`
+    : null;
 
   useEffect(() => {
     if (jobStatus?.status !== "completed" || !jobStatus.job_id) return;
@@ -155,7 +159,7 @@ export default function DealDeskPage() {
   }, [pendingPersistenceJobId, jobStatus, memLoading, memError, memory]);
 
   const handleAnalyze = async () => {
-    if (!transcript || !competitorUrl) return;
+    if (!transcript || !competitorUrl || memoryUnavailableForAnalysis) return;
     setPersistenceIssue(null);
     setPendingPersistenceJobId(null);
     triggerDealAnalysis(competitorName || competitorUrl);
@@ -350,12 +354,32 @@ export default function DealDeskPage() {
                   message={`${analysisError}. Check the competitor URL, tighten the transcript, and try again.`}
                 />
               )}
+              {memoryUnavailableMessage && (
+                <DashboardErrorBanner
+                  title="Memory unavailable"
+                  message={memoryUnavailableMessage}
+                  actionLabel="Retry Memory Check"
+                  onAction={refreshMemory}
+                />
+              )}
               <button
                 onClick={handleAnalyze}
-                disabled={isRunning || !transcript || !competitorUrl}
+                disabled={isRunning || !transcript || !competitorUrl || memoryUnavailableForAnalysis}
                 className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-2"
               >
-                {isRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> Analyzing...</> : <><Send className="w-4 h-4" /> Run Analysis</>}
+                {isRunning ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Analyzing...
+                  </>
+                ) : memoryUnavailableForAnalysis ? (
+                  <>
+                    <ShieldCheck className="w-4 h-4" /> Memory Unavailable
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-4 h-4" /> Run Analysis
+                  </>
+                )}
               </button>
             </div>
           </div>
