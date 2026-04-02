@@ -15,6 +15,8 @@ const ALLOWED_ROOTS = new Set([
   "executive-summary",
   "record-outcome",
   "winning-patterns",
+  "workspace",
+  "workspace-setup",
 ]);
 
 export const dynamic = "force-dynamic";
