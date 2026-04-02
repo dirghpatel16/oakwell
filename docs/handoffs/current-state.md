@@ -13,6 +13,9 @@ The platform uses multi-agent AI to cross-reference sales transcripts with live 
 - Expanding the AI agent pipeline (currently 10 stages).
 
 ## Recently completed
+- **Workspace Personas & Context-Aware Intelligence**: Oakwell now persists a per-scope `WorkspacePersona` (company name, value prop, user role, target audience, competitors) in a new `oakwell_workspaces` Firestore collection. The persona is loaded at the start of every analysis run and injected into all three AI specialist prompts. `your_product` auto-falls back to `workspace.company_name`. New endpoints: `GET/POST /workspace`, `GET /workspace-setup`. New middleware: redirects new Clerk users to `/onboarding` until `oakwell_workspace_configured` cookie is set. Settings page upgraded from static UI to live load/save. Deal Desk "Your Product" field auto-fills from workspace. Ephemeral JSON fallback at `outputs/workspaces.json` for local dev.
+
+
 - **Dual Dashboard Architecture**: Created shared `DashboardShell` and separated `/demo` from `/dashboard`.
 - **Demo Mode Engine**: Built `demo-data.ts` and updated hooks/context to support forced demo mode.
 - **Shared Dashboard Page Modules**: Moved dashboard page implementations into `website-2/src/components/dashboard-pages` so `/dashboard` and `/demo` now share UI through non-route modules instead of route-to-route imports.
@@ -34,6 +37,7 @@ The platform uses multi-agent AI to cross-reference sales transcripts with live 
 - **Git Sync**: All local changes committed and pushed to GitHub (`main`).
 
 ## In progress
+- Cloud Run + Vercel redeploy needed to activate Workspace Personas in production.
 - Validation of a true end-to-end analysis run that writes usable data into `/memory`.
 - Validating the new loud-failure persistence path in Cloud Run after redeploy so Firestore issues appear as explicit 503s instead of transient “saved for today, gone tomorrow” behavior.
 - Validating the new `/analysis-runs` path in production so the dashboard can show immutable run history and evidence ledger cards from real Firestore data after reload/day-two return visits.
@@ -46,7 +50,8 @@ The platform uses multi-agent AI to cross-reference sales transcripts with live 
 - CRM Integration: Determining which CRM (Salesforce/HubSpot) to prioritize for first-party data.
 
 ## Known blockers
-- **End-to-End Analysis Proof Pending**: This workspace does not currently have `GOOGLE_API_KEY`, so the latest fast-model backend path cannot be fully exercised locally.
+- **Workspace Personas Deploy Pending**: Cloud Run and Vercel must be redeployed with the latest `main.py` / `middleware.ts` / frontend changes for workspace endpoints, prompt injection, and the onboarding redirect to be live in production.
+- **End-to-End Analysis Proof Pending**: `GOOGLE_API_KEY` is available locally but Cloud Run must be redeployed to exercise the full workspace-aware pipeline in production.
 - **Deployment Validation Pending**: Cloud Run must be redeployed with the latest `main.py` / `tools.py` fast-model patch before the live backend can be trusted as the working-model source of truth.
 - **Post-Fix Redeploy Needed**: Cloud Run must be redeployed with the explicit GenAI API-key resolution patch before production analysis can be trusted; otherwise `/analyze-deal` may still fail with SDK auth-discovery errors even when `GOOGLE_API_KEY` is present in Cloud Run.
 - **Persistence Deploy Needed**: Cloud Run must be redeployed with the new persistence gate. Until then, production may still silently use instance-local JSON fallback and appear to “forget” analyses across days or instance restarts.
@@ -76,6 +81,11 @@ The platform uses multi-agent AI to cross-reference sales transcripts with live 
 - `docs/security/public-launch-checklist.md`: Operational checklist for making the repo/app public safely.
 
 ## Backend / frontend contract notes
+- **Workspace Persona Contract**: `GET /workspace` returns `{ configured: bool, workspace: WorkspacePersona | null }`. `GET /workspace-setup` returns `{ configured: bool }` (lightweight, for middleware). `POST /workspace` accepts `WorkspacePersona` fields (all optional). Workspace is loaded server-side in `run_oakwell_analysis` — frontend does NOT pass it in `AnalyzeDealRequest`.
+- **Onboarding Cookie**: `oakwell_workspace_configured=true; path=/; max-age=31536000` is set client-side by `onboarding/page.tsx` after workspace is saved. Middleware reads this cookie to gate the onboarding redirect. Deleting the cookie forces re-onboarding on next dashboard visit.
+- **`your_product` fallback**: If `AnalyzeDealRequest.your_product` is `None`, the backend falls back to `workspace.company_name`. The Deal Desk pre-fills the field from workspace data so users rarely need to type it manually.
+
+
 - **Data Hooks**: All frontend hooks (`useQuery`, `useMemory`, etc.) in `hooks.ts` dynamically bypass the API fetch if `isDemo` is true (passing `demoData` instead).
 - **Production API Status**: Live Cloud Run is healthy at `/health`, but production data is currently empty (`/memory` returns `{}` and `/sentinel-status` shows zero watched URLs).
 - **Persistence Health Contract**: `/health` now exposes `persistence_ready`, `persistence_backend`, and `persistence_reason` so production can distinguish “healthy API” from “durable memory actually available.”

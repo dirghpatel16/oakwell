@@ -1,5 +1,33 @@
 # Recent Changes
 
+## 2026-04-02
+### Summary
+Implemented Workspace Personas & Context-Aware Intelligence. Oakwell now persists a per-user/org profile (company name, value proposition, user role, target buyers, competitors) and injects it into every AI specialist prompt on each analysis run — making the platform context-aware without the user needing to re-enter their identity on every request. Added a first-login onboarding redirect, live Settings persistence, and auto-fill of the "Your Product" field in Deal Desk.
+
+### Files touched
+- `main.py`: Added `FIRESTORE_WORKSPACES_COLLECTION`, `WORKSPACE_FILE`, `WorkspacePersona` Pydantic model, `_load_workspace` / `_save_workspace` helpers, `GET /workspace`, `GET /workspace-setup`, `POST /workspace` endpoints, workspace context injection into `_specialist_score_deal`, `_specialist_write_talk_track`, `_run_adversarial_critique`, and `run_oakwell_analysis`. Fixed `_require_durable_memory` and `_require_scope_memory_query_ready` to respect `ALLOW_EPHEMERAL_MEMORY_FALLBACK`.
+- `website-2/src/app/api/backend/[...path]/route.ts`: Added `workspace` and `workspace-setup` to `ALLOWED_ROOTS`.
+- `website-2/src/lib/api.ts`: Added `WorkspacePersona`, `WorkspaceResponse` types and `getWorkspace`, `getWorkspaceSetupStatus`, `saveWorkspace` API functions.
+- `website-2/src/middleware.ts`: Added cookie-based onboarding redirect — new Clerk users are sent to `/onboarding` until `oakwell_workspace_configured=true` is set.
+- `website-2/src/app/onboarding/page.tsx`: Added `valueProp` and `userRole` fields to Step 1; calls `api.saveWorkspace()` and sets `oakwell_workspace_configured` cookie on scan completion; converted "Enter Your War Room" link to `router.push`.
+- `website-2/src/lib/hooks.ts`: Added `useWorkspace()` hook with demo mode support (`DEMO_WORKSPACE` stable reference).
+- `website-2/src/components/dashboard-pages/deals-page.tsx`: Imported `useWorkspace`; `yourProduct` state starts empty and auto-fills from `workspace.company_name` via `useEffect`.
+- `website-2/src/components/dashboard-pages/settings-page.tsx`: Converted from static UI to live data — loads workspace on mount, editable fields for company name/value prop/role, save button wired to `api.saveWorkspace()`.
+- `.gitignore`: Added `outputs/workspaces.json` and `outputs/analysis_runs.json` to prevent committing runtime data.
+- `docs/architecture/overview.md`, `docs/architecture/backend.md`, `docs/architecture/frontend.md`, `docs/architecture/ai-agents.md`: Fully rewritten to reflect actual implementation state.
+
+### Why
+Oakwell was stateless — the AI had no knowledge of who it was working for. Every analysis produced generic output because `your_product` was typed manually each time and the prompts had zero company or role context. Workspace Personas transform Oakwell into a context-aware orchestrator: the AI now knows the company's value proposition, the rep's role, and who the buyers are — making every analysis feel purpose-built rather than generic.
+
+### Risks / follow-ups
+- **Follow-up**: `oakwell_workspaces` Firestore collection must be created in production (it is auto-created on first write, but ensure Firestore rules allow it).
+- **Follow-up**: Cloud Run must be redeployed with the updated `main.py` for workspace endpoints and prompt injection to be live.
+- **Follow-up**: Vercel must be redeployed so the updated `middleware.ts` onboarding redirect and `workspace`/`workspace-setup` proxy routes are active.
+- **Follow-up**: The `oakwell_workspace_configured` cookie is client-set; consider moving to a server-set HttpOnly cookie for stronger security before public launch.
+- **Follow-up**: `user_role` is in the workspace context string but specialists don't branch on it explicitly — the model infers tone from context. A future pass could add role-specific output sections.
+
+
+
 ## 2026-04-01
 ### Summary
 Fixed Oakwell’s “memory disappears after a day” production trust gap. The backend now treats Firestore as the required durable memory backend for production instead of silently falling back to `outputs/memory.json`, and the dashboard now refuses to present transient job results as if they were durably saved analyses.
