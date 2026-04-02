@@ -17,7 +17,7 @@ import {
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
-import { useMemory, useDealAnalysis, useEmailGeneration, useAnalysisRuns } from "@/lib/hooks";
+import { useMemory, useDealAnalysis, useEmailGeneration, useAnalysisRuns, useWorkspace } from "@/lib/hooks";
 import { useWebSocket } from "@/lib/websocket-context";
 import { useDemoMode } from "@/lib/demo-context";
 import { getProofUrl } from "@/lib/api";
@@ -27,6 +27,7 @@ export default function DealDeskPage() {
   const { data: memory, loading: memLoading, error: memError, refresh: refreshMemory } = useMemory();
   const { analyze, jobStatus, isRunning, error: analysisError, reset } = useDealAnalysis();
   const { email, loading: emailLoading, generate: generateEmail } = useEmailGeneration();
+  const { data: workspace } = useWorkspace();
   const { triggerDealAnalysis } = useWebSocket();
   const { isDemo } = useDemoMode();
   const lastCompletedJobRef = useRef<string | null>(null);
@@ -34,7 +35,7 @@ export default function DealDeskPage() {
   const [transcript, setTranscript] = useState("");
   const [competitorUrl, setCompetitorUrl] = useState("");
   const [competitorName, setCompetitorName] = useState("");
-  const [yourProduct, setYourProduct] = useState("Oakwell");
+  const [yourProduct, setYourProduct] = useState("");
   const [dealStage, setDealStage] = useState<string>("discovery");
   const [dealValue, setDealValue] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -101,6 +102,12 @@ export default function DealDeskPage() {
   const memoryUnavailableMessage = memError
     ? `${memError}. Oakwell requires durable memory before starting a production analysis.`
     : null;
+
+  useEffect(() => {
+    if (workspace?.workspace?.company_name && !yourProduct) {
+      setYourProduct(workspace.workspace.company_name);
+    }
+  }, [workspace]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (jobStatus?.status !== "completed" || !jobStatus.job_id) return;

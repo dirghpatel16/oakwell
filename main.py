@@ -14,7 +14,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, List, Union, Dict, Tuple
+from typing import Any, Optional, List, Union, Dict, Tuple, Literal
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -78,7 +78,7 @@ def _persistence_status() -> Dict[str, Any]:
 def _require_durable_memory() -> None:
     """Fail fast when Oakwell cannot reach a durable memory backend."""
     status = _persistence_status()
-    if status["durable_memory_ready"]:
+    if status["durable_memory_ready"] or ALLOW_EPHEMERAL_MEMORY_FALLBACK:
         return
     raise PersistenceUnavailableError(
         "Durable memory is unavailable. Fix Firestore connectivity before running production analysis."
@@ -99,6 +99,8 @@ def _owner_scope_filtered_query(collection: str, owner_scope: str) -> Any:
 def _require_scope_memory_query_ready(owner_scope: str) -> None:
     """Validate that owner-scoped memory reads are operational, not just boot-initialized."""
     _require_durable_memory()
+    if ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+        return
     try:
         query = _owner_scope_filtered_query(FIRESTORE_COLLECTION, owner_scope)
         list(query.limit(1).stream())
@@ -214,6 +216,8 @@ DEAL_STAGE_PLAYBOOKS: Dict[str, Dict[str, Any]] = {
 }
 
 FIRESTORE_OUTCOMES_COLLECTION = "oakwell_outcomes"
+FIRESTORE_WORKSPACES_COLLECTION = "oakwell_workspaces"
+WORKSPACE_FILE = OUTPUTS_DIR / "workspaces.json"
 
 
 def _get_stage_playbook(stage: Optional[str]) -> Dict[str, Any]:
@@ -1111,6 +1115,80 @@ async def _detect_market_drift(
         logger.warning("Market drift detection failed: %s", exc)
         return {"drift_detected": False, "alerts": [], "error": str(exc)}
 
+
+# ---------------------------------------------------------------------------
+# Workspace Persona persistence helpers
+# ---------------------------------------------------------------------------
+
+def _load_workspace(owner_scope: str) -> Optional[Dict[str, Any]]:
+    """Load workspace persona for an owner scope. Returns None if not configured."""
+    if _firestore_db is not None:
+        try:
+            doc = _firestore_db.collection(FIRESTORE_WORKSPACES_COLLECTION).document(
+                _scope_token(owner_scope)
+            ).get()
+            if doc.exists:
+                data = doc.to_dict()
+                data.pop("owner_scope", None)
+                return data
+            return None
+        except Exception as exc:
+            if not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+                raise PersistenceUnavailableError(
+                    f"Workspace load failed for scope {owner_scope}: {exc}"
+                ) from exc
+            logger.warning("Firestore _load_workspace failed, falling back to JSON: %s", exc)
+
+    if not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+        raise PersistenceUnavailableError(
+            "Durable memory is unavailable. Fix Firestore connectivity to load workspace."
+        )
+
+    if not WORKSPACE_FILE.exists():
+        return None
+    try:
+        workspaces = json.loads(WORKSPACE_FILE.read_text(encoding="utf-8"))
+        entry = workspaces.get(_scope_token(owner_scope))
+        if entry:
+            entry = dict(entry)
+            entry.pop("owner_scope", None)
+        return entry or None
+    except Exception as exc:
+        logger.warning("Failed to load workspaces.json: %s", exc)
+        return None
+
+
+def _save_workspace(owner_scope: str, data: Dict[str, Any]) -> None:
+    """Save or update workspace persona for an owner scope."""
+    record = {"owner_scope": owner_scope, **data}
+    if _firestore_db is not None:
+        try:
+            _firestore_db.collection(FIRESTORE_WORKSPACES_COLLECTION).document(
+                _scope_token(owner_scope)
+            ).set(record, merge=True)
+            return
+        except Exception as exc:
+            if not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+                raise PersistenceUnavailableError(
+                    f"Workspace save failed for scope {owner_scope}: {exc}"
+                ) from exc
+            logger.warning("Firestore _save_workspace failed, falling back to JSON: %s", exc)
+
+    if not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+        raise PersistenceUnavailableError(
+            "Durable memory is unavailable. Fix Firestore connectivity to save workspace."
+        )
+
+    workspaces: Dict[str, Any] = {}
+    if WORKSPACE_FILE.exists():
+        try:
+            workspaces = json.loads(WORKSPACE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    workspaces[_scope_token(owner_scope)] = record
+    WORKSPACE_FILE.write_text(json.dumps(workspaces, indent=2, default=str), encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Request/Response models
 # ---------------------------------------------------------------------------
@@ -1145,6 +1223,14 @@ class RecordOutcomeRequest(BaseModel):
     deal_value: Optional[float] = Field(None, ge=0, le=1000000000, description="Final deal value in USD")
     deal_stage: Optional[str] = Field(None, description="Stage when deal concluded")
     reason: Optional[str] = Field(None, max_length=2000, description="Why the deal was won/lost/stalled")
+
+
+class WorkspacePersona(BaseModel):
+    company_name: Optional[str] = Field(None, max_length=200)
+    value_prop: Optional[str] = Field(None, max_length=1000)
+    user_role: Optional[Literal["sdr", "ae", "manager", "exec"]] = None
+    target_audience: Optional[str] = Field(None, max_length=500)
+    competitors: Optional[List[str]] = Field(default_factory=list)
 
 
 class DealStatusResponse(BaseModel):
@@ -1371,6 +1457,7 @@ async def _specialist_score_deal(
     api_key: Optional[str] = None,
     analysis_mode: str = "proof_verification",
     verification_reason: Optional[str] = None,
+    workspace_context: str = "",
 ) -> Dict[str, Any]:
     """Specialist #1: Produce an accurate deal_health_score (fast model — numeric, low-latency)."""
 
@@ -1379,7 +1466,7 @@ async def _specialist_score_deal(
     history_context = history_context or {}
     winning_patterns = winning_patterns or {}
 
-    prompt = f"""You are a Deal Scoring Specialist. Your ONLY job is to produce an accurate deal_health_score (0-100).
+    prompt = f"""{workspace_context}You are a Deal Scoring Specialist. Your ONLY job is to produce an accurate deal_health_score (0-100).
 
 **INPUTS:**
 - Competitor: {comp}
@@ -1483,6 +1570,7 @@ async def _specialist_write_talk_track(
     api_key: Optional[str] = None,
     analysis_mode: str = "proof_verification",
     verification_reason: Optional[str] = None,
+    workspace_context: str = "",
 ) -> Dict[str, Any]:
     """Specialist #2: Write the adversarial talk-track (gemini-2.5-pro — strategic, stage-aware)."""
 
@@ -1509,7 +1597,7 @@ Win rate: {winning_patterns.get('win_rate', 0):.0%} | Revenue won: ${winning_pat
 """
 
     if analysis_mode == "strategy_only":
-        prompt = f"""You are The Oakwell Strategist. Produce a fast, high-signal strategic brief for the rep.
+        prompt = f"""{workspace_context}You are The Oakwell Strategist. Produce a fast, high-signal strategic brief for the rep.
 
 **DEAL CONTEXT:**
 - Competitor: {comp}
@@ -1545,7 +1633,7 @@ Respond with ONLY valid JSON (no markdown fences):
   "proof_artifact_path": ""
 }}"""
     else:
-        prompt = f"""You are The Oakwell Strategist — AGI-level Revenue Strategist. Write the exact words a sales rep should say to win this deal.
+        prompt = f"""{workspace_context}You are The Oakwell Strategist — AGI-level Revenue Strategist. Write the exact words a sales rep should say to win this deal.
 
 **DEAL CONTEXT:**
 - Competitor: {comp}
@@ -1660,6 +1748,7 @@ async def _run_adversarial_critique(
     deep_sentiment: Dict[str, Any],
     competitor_name: str,
     api_key: Optional[str] = None,
+    workspace_context: str = "",
 ) -> Dict[str, Any]:
     """Simulate the competitor's CEO stress-testing Oakwell's strategy."""
 
@@ -1700,7 +1789,7 @@ of Oakwell's strategy — it means the web scraping encountered rate limits.
 - Focus your counter-attacks on product/pricing/trust angles, not on missing sentiment.
 """
 
-    prompt = f"""You are the **CEO of {competitor_name}**. A competitor sales team (Oakwell) is about
+    prompt = f"""{workspace_context}You are the **CEO of {competitor_name}**. A competitor sales team (Oakwell) is about
 to use the following strategy against you. Your job is to find every weakness and
 demand hardening before any sales rep sees this.
 {sentiment_guidance}
@@ -1801,6 +1890,19 @@ async def run_oakwell_analysis(
     try:
         jobs[job_id]["status"] = "running"
         _set_progress(job_id, "Loading Neural Memory…")
+
+        # ── Workspace Persona: load context for prompt injection ──
+        _workspace = _load_workspace(owner_scope) if ALLOW_EPHEMERAL_MEMORY_FALLBACK or _firestore_db is not None else None
+        _workspace_ctx = ""
+        if _workspace:
+            _workspace_ctx = (
+                f"WORKSPACE CONTEXT:\n"
+                f"Company: {_workspace.get('company_name', '')} — {_workspace.get('value_prop', '')}\n"
+                f"Rep Role: {_workspace.get('user_role', '')}\n"
+                f"Target Buyers: {_workspace.get('target_audience', '')}\n\n"
+            )
+            if not your_product:
+                your_product = _workspace.get("company_name") or your_product
 
         # ── Neural Memory: load prior intelligence ──
         prior = _load_memory_for_url(competitor_url, owner_scope)
@@ -1958,6 +2060,7 @@ async def run_oakwell_analysis(
             api_key,
             analysis_mode,
             verification_reason,
+            workspace_context=_workspace_ctx,
         )
         _deal_score = score_result.get("deal_health_score", 50)
         _score_reasoning = score_result.get("score_reasoning", "")
@@ -1981,6 +2084,7 @@ async def run_oakwell_analysis(
             api_key,
             analysis_mode,
             verification_reason,
+            workspace_context=_workspace_ctx,
         )
         result["deal_health_score"] = _deal_score
         result["score_reasoning"] = _score_reasoning
@@ -2016,6 +2120,7 @@ async def run_oakwell_analysis(
                     deep_sentiment=deep_sentiment,
                     competitor_name=competitor_name or "competitor",
                     api_key=api_key,
+                    workspace_context=_workspace_ctx,
                 )
                 logger.info(
                     "Adversarial Critique verdict for %s: %s (confidence %.2f)",
@@ -2078,6 +2183,7 @@ async def run_oakwell_analysis(
                     api_key,
                     analysis_mode,
                     verification_reason,
+                    workspace_context=_workspace_ctx,
                 )
                 # Only accept if it produced a real talk-track
                 if hardened_result.get("talk_track") and len(hardened_result["talk_track"]) > 50:
@@ -2710,6 +2816,41 @@ async def winning_patterns_endpoint(
         return _get_winning_patterns(auth_ctx.scope_id, competitor_url=url)
     except PersistenceUnavailableError as exc:
         raise _http_503_from_persistence(exc) from exc
+
+
+@app.get("/workspace")
+async def get_workspace(auth_ctx: AuthContext = Depends(_require_auth_context)) -> Dict[str, Any]:
+    """Return the workspace persona for the current scope."""
+    try:
+        workspace = _load_workspace(auth_ctx.scope_id)
+    except PersistenceUnavailableError:
+        workspace = None
+    return {"configured": workspace is not None, "workspace": workspace}
+
+
+@app.get("/workspace-setup")
+async def workspace_setup_status(auth_ctx: AuthContext = Depends(_require_auth_context)) -> Dict[str, Any]:
+    """Lightweight check — does this scope have a workspace configured?"""
+    try:
+        workspace = _load_workspace(auth_ctx.scope_id)
+    except PersistenceUnavailableError:
+        workspace = None
+    return {"configured": workspace is not None}
+
+
+@app.post("/workspace")
+async def save_workspace_endpoint(
+    req: WorkspacePersona,
+    request: Request,
+    auth_ctx: AuthContext = Depends(_require_auth_context),
+) -> Dict[str, Any]:
+    """Save or update the workspace persona for the current scope."""
+    _enforce_rate_limit(request, auth_ctx.scope_id, "workspace", limit=10, window_seconds=60)
+    try:
+        _save_workspace(auth_ctx.scope_id, req.model_dump(exclude_none=True))
+    except PersistenceUnavailableError as exc:
+        raise _http_503_from_persistence(exc) from exc
+    return {"status": "saved"}
 
 
 # ---------------------------------------------------------------------------

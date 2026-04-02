@@ -1,10 +1,11 @@
 "use client";
 import React, { useState, useRef } from "react";
-import { 
-  ArrowRight, 
+import { useRouter } from "next/navigation";
+import {
+  ArrowRight,
   ArrowLeft,
-  Check, 
-  Building2, 
+  Check,
+  Building2,
   Webhook,
   Target,
   MessageSquare,
@@ -24,8 +25,11 @@ interface CompetitorEntry {
 }
 
 export default function OnboardingPage() {
+  const router = useRouter();
   const [step, setStep] = useState<OnboardingStep>(1);
   const [companyName, setCompanyName] = useState("");
+  const [valueProp, setValueProp] = useState("");
+  const [userRole, setUserRole] = useState("");
   const [industry, setIndustry] = useState("");
   const [teamSize, setTeamSize] = useState("");
   const [crmSelected, setCrmSelected] = useState<string | null>(null);
@@ -163,6 +167,20 @@ export default function OnboardingPage() {
     setScanProgress(100);
     setScanStep("✓ Setup complete!");
     addLog("[system] ✓ Oakwell is now protecting your revenue.", "text-green-500", true);
+
+    // Save workspace persona and mark onboarding complete
+    try {
+      await api.saveWorkspace({
+        company_name: companyName || undefined,
+        value_prop: valueProp || undefined,
+        user_role: (userRole as api.WorkspacePersona["user_role"]) || undefined,
+        target_audience: teamSize || undefined,
+        competitors: validCompetitors.map(c => c.domain.trim().startsWith("http") ? c.domain.trim() : `https://${c.domain.trim()}`),
+      });
+    } catch {
+      // Non-fatal — workspace can be configured later in Settings
+    }
+    document.cookie = "oakwell_workspace_configured=true; path=/; max-age=31536000";
   };
 
   return (
@@ -213,13 +231,34 @@ export default function OnboardingPage() {
               subtitle="This helps us configure your competitive intelligence."
             >
               <div className="space-y-4">
-                <InputField 
-                  label="Company Name" 
-                  placeholder="e.g. Acme Corp" 
+                <InputField
+                  label="Company Name"
+                  placeholder="e.g. Acme Corp"
                   value={companyName}
                   onChange={setCompanyName}
                 />
-                <SelectField 
+                <div className="space-y-1">
+                  <label className="text-xs text-zinc-400">Value Proposition</label>
+                  <textarea
+                    className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 resize-none"
+                    rows={2}
+                    placeholder="e.g. We help sales teams close deals 2x faster with AI-powered intelligence"
+                    value={valueProp}
+                    onChange={e => setValueProp(e.target.value)}
+                  />
+                </div>
+                <SelectField
+                  label="Your Role"
+                  value={userRole}
+                  onChange={setUserRole}
+                  options={[
+                    { value: "sdr", label: "SDR / BDR" },
+                    { value: "ae", label: "Account Executive" },
+                    { value: "manager", label: "Sales Manager" },
+                    { value: "exec", label: "Executive / VP" },
+                  ]}
+                />
+                <SelectField
                   label="Industry"
                   value={industry}
                   onChange={setIndustry}
@@ -232,7 +271,7 @@ export default function OnboardingPage() {
                     { value: "other", label: "Other" },
                   ]}
                 />
-                <SelectField 
+                <SelectField
                   label="Sales Team Size"
                   value={teamSize}
                   onChange={setTeamSize}
@@ -459,12 +498,12 @@ export default function OnboardingPage() {
                   </div>
 
                   {scanProgress >= 100 && (
-                    <a 
-                      href="/dashboard"
+                    <button
+                      onClick={() => router.push("/dashboard")}
                       className="w-full py-3 bg-green-600 hover:bg-green-500 text-white rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-2"
                     >
                       Enter Your War Room <ArrowRight className="w-4 h-4" />
-                    </a>
+                    </button>
                   )}
                 </div>
               )}
