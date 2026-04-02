@@ -8,6 +8,7 @@ const ALLOWED_ROOTS = new Set([
   "deal-status",
   "proof",
   "health",
+  "storage-status",
   "sentinel-status",
   "memory",
   "competitor-trend",

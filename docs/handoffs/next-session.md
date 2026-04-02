@@ -18,7 +18,7 @@
    - login throttling / bot protection
 2. Deploy the new secure request path end-to-end:
    - Vercel: `OAKWELL_BACKEND_URL`, `OAKWELL_INTERNAL_API_SECRET`, Clerk envs
-   - Cloud Run: `OAKWELL_INTERNAL_API_SECRET`, `GOOGLE_API_KEY`, Clerk-related app envs as needed
+   - Cloud Run: `OAKWELL_INTERNAL_API_SECRET`, `GOOGLE_API_KEY`, `OAKWELL_FIRESTORE_PROJECT` (or `FIRESTORE_PROJECT` / `GOOGLE_CLOUD_PROJECT`), Clerk-related app envs as needed
 3. Redeploy Cloud Run with the latest `main.py` / `tools.py` fast-model update (`gemini-2.5-flash` default via `OAKWELL_FAST_MODEL`) so the live analysis path no longer depends on deprecated `gemini-2.0-flash`.
 4. Confirm the explicit GenAI auth patch is live in Cloud Run:
    - `tools.py` now resolves `GOOGLE_API_KEY` / `GEMINI_API_KEY` explicitly instead of relying on SDK auto-discovery
@@ -35,6 +35,7 @@
 - **Shared Page Ownership**: Do not point `/demo` route files at `/dashboard` route files again; both route groups should import shared non-route modules from `src/components/dashboard-pages`.
 - **Local Env Limitation**: This workspace currently lacks `GOOGLE_API_KEY`, so local end-to-end analysis cannot prove the new backend model path without external env setup.
 - **Cloud Run Validation**: A deploy can still look healthy while model auth is broken. Validate the explicit-key patch by running a real `/analyze-deal` request after redeploy, not just `/health`.
+- **Storage Validation**: Use `/storage-status` (through `/api/backend/storage-status`) during onboarding validation to confirm `firestore_available=true` before expecting production War Room memory to populate.
 - **Evidence State Contract**: Deal results now expose `analysis_mode`, `evidence_status`, `evidence_summary`, `verification_reason`, `claim_count`, and `verified_claim_count`. Preserve those fields at the API seam and in new dashboard surfaces.
 - **Security Boundary**: The frontend should use the same-origin proxy route (`/api/backend/*`), not direct browser calls to Cloud Run. FastAPI now expects `X-Oakwell-Internal-Secret` and forwarded user/org headers from that proxy.
 - **Ownership Checks**: Job polling, proof downloads, memory reads, trend queries, executive summaries, and win/loss analytics are all scoped to `owner_scope`. Do not reintroduce unscoped global reads.

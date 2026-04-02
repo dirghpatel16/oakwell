@@ -50,6 +50,15 @@ export interface WinningPatterns {
   deal_value_lost: number;
 }
 
+export interface StorageStatus {
+  owner_scope: string;
+  storage_mode: "firestore" | "local_fallback";
+  firestore_project: string;
+  firestore_collection: string;
+  firestore_available: boolean;
+  firestore_init_error?: string | null;
+}
+
 export interface AnalyzeDealRequest {
   transcript: string;
   competitor_url: string;
@@ -354,6 +363,11 @@ export async function getMemory(): Promise<MemoryBank> {
 /** Health check */
 export async function getHealth(): Promise<{ status: string }> {
   return request<{ status: string }>("/health");
+}
+
+/** Backend storage diagnostics */
+export async function getStorageStatus(): Promise<StorageStatus> {
+  return request<StorageStatus>("/storage-status");
 }
 
 /** Autonomous sentinel status */
