@@ -30,6 +30,8 @@ Oakwell/.adk/
 # Outputs
 outputs/memory.json
 outputs/outcomes.json
+outputs/workspaces.json
+outputs/analysis_runs.json
 
 # Proof screenshots
 outputs/*.png

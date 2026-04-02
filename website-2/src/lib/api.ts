@@ -210,6 +210,19 @@ export interface GenerateEmailRequest {
   deal_results?: Record<string, unknown>;
 }
 
+export interface WorkspacePersona {
+  company_name?: string;
+  value_prop?: string;
+  user_role?: "sdr" | "ae" | "manager" | "exec";
+  target_audience?: string;
+  competitors?: string[];
+}
+
+export interface WorkspaceResponse {
+  configured: boolean;
+  workspace?: WorkspacePersona;
+}
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -589,4 +602,22 @@ export async function recordOutcome(body: RecordOutcomeRequest): Promise<{ statu
 /** Get proof screenshot URL */
 export function getProofUrl(filename: string): string {
   return `${API_URL}/proof/${encodeURIComponent(filename)}`;
+}
+
+/** Load the workspace persona for the current user/org */
+export async function getWorkspace(): Promise<WorkspaceResponse> {
+  return request<WorkspaceResponse>("/workspace");
+}
+
+/** Lightweight check — has this user configured a workspace? */
+export async function getWorkspaceSetupStatus(): Promise<{ configured: boolean }> {
+  return request<{ configured: boolean }>("/workspace-setup");
+}
+
+/** Save or update the workspace persona */
+export async function saveWorkspace(body: WorkspacePersona): Promise<{ status: string }> {
+  return request<{ status: string }>("/workspace", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }

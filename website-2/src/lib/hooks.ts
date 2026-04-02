@@ -103,6 +103,14 @@ function useQuery<T>(
   return { data, error, loading, refresh };
 }
 
+// Stable references to avoid re-render loops when passed as demoData
+const DEMO_HEALTH_STATUS = { status: "ok" } as const;
+const EMPTY_RUNS: AnalysisRun[] = [];
+const DEMO_WORKSPACE: api.WorkspaceResponse = {
+  configured: true,
+  workspace: { company_name: "Acme Corp (Demo)", user_role: "ae" },
+};
+
 // ---------------------------------------------------------------------------
 // Domain-specific hooks — all demo-aware
 // ---------------------------------------------------------------------------
@@ -160,7 +168,7 @@ export function useAnalysisRuns(url?: string, refreshInterval = 60_000) {
     () => (url ? api.getAnalysisRuns(url) : Promise.resolve([])),
     [url, isDemo],
     shouldBypass ? undefined : refreshInterval,
-    shouldBypass ? [] : undefined
+    shouldBypass ? EMPTY_RUNS : undefined
   );
 }
 
@@ -171,7 +179,18 @@ export function useHealth(refreshInterval = 15_000) {
     () => api.getHealth(),
     [isDemo],
     refreshInterval,
-    isDemo ? { status: "ok" } : undefined
+    isDemo ? DEMO_HEALTH_STATUS : undefined
+  );
+}
+
+/** Workspace persona — company name, role, value prop */
+export function useWorkspace() {
+  const { isDemo } = useDemoMode();
+  return useQuery<api.WorkspaceResponse>(
+    () => api.getWorkspace(),
+    [isDemo],
+    undefined,
+    isDemo ? DEMO_WORKSPACE : undefined
   );
 }
 

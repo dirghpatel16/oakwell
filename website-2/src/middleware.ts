@@ -12,6 +12,11 @@ const hasClerk = Boolean(
 const withClerk = clerkMiddleware(async (auth, req) => {
   if (isProtectedRoute(req)) {
     await auth.protect()
+    const { userId } = await auth()
+    const configured = req.cookies.get("oakwell_workspace_configured")?.value === "true"
+    if (userId && !configured) {
+      return NextResponse.redirect(new URL("/onboarding", req.url))
+    }
   }
 })
 

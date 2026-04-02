@@ -1,5 +1,5 @@
 "use client";
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
   User,
   Building2,
@@ -11,8 +11,43 @@ import {
   ChevronRight,
   Check,
 } from "lucide-react";
+import { useWorkspace } from "@/lib/hooks";
+import * as api from "@/lib/api";
 
 export default function SettingsPage() {
+  const { data: workspaceData, refresh: refreshWorkspace } = useWorkspace();
+  const [companyName, setCompanyName] = useState("");
+  const [valueProp, setValueProp] = useState("");
+  const [userRole, setUserRole] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (workspaceData?.workspace) {
+      setCompanyName(workspaceData.workspace.company_name || "");
+      setValueProp(workspaceData.workspace.value_prop || "");
+      setUserRole(workspaceData.workspace.user_role || "");
+    }
+  }, [workspaceData]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await api.saveWorkspace({
+        company_name: companyName || undefined,
+        value_prop: valueProp || undefined,
+        user_role: (userRole as api.WorkspacePersona["user_role"]) || undefined,
+      });
+      setSaved(true);
+      refreshWorkspace();
+      setTimeout(() => setSaved(false), 2000);
+    } catch {
+      // show nothing — user can retry
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="p-6 md:p-8 max-w-[900px] mx-auto space-y-8">
       <div className="border-b border-zinc-800 pb-6">
@@ -30,9 +65,46 @@ export default function SettingsPage() {
 
       <SettingsSection icon={<Building2 className="w-4 h-4" />} title="Workspace" description="Organization and team settings">
         <div className="space-y-4">
-          <SettingsRow label="Organization" value="Oakwell Inc." />
-          <SettingsRow label="Plan" value="Early Access (Free)" badge />
-          <SettingsRow label="Team Members" value="1 / 10 seats" />
+          <div className="space-y-1">
+            <label className="text-xs text-zinc-500">Company Name</label>
+            <input
+              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500"
+              placeholder="e.g. Acme Corp"
+              value={companyName}
+              onChange={e => setCompanyName(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-zinc-500">Value Proposition</label>
+            <textarea
+              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500 resize-none"
+              rows={2}
+              placeholder="e.g. We help sales teams close deals 2x faster with AI-powered intelligence"
+              value={valueProp}
+              onChange={e => setValueProp(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-zinc-500">Your Role</label>
+            <select
+              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+              value={userRole}
+              onChange={e => setUserRole(e.target.value)}
+            >
+              <option value="">Select role...</option>
+              <option value="sdr">SDR / BDR</option>
+              <option value="ae">Account Executive</option>
+              <option value="manager">Sales Manager</option>
+              <option value="exec">Executive / VP</option>
+            </select>
+          </div>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm rounded-lg font-medium transition-colors flex items-center gap-2"
+          >
+            {saved ? <><Check className="w-3 h-3" /> Saved</> : saving ? "Saving..." : "Save Workspace"}
+          </button>
         </div>
       </SettingsSection>
 
