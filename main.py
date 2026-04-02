@@ -110,14 +110,22 @@ def _require_scope_memory_query_ready(owner_scope: str) -> None:
         ) from exc
 
 # ---------------------------------------------------------------------------
-# Firestore client  (project: gen-lang-client-0830900967)
+# Firestore client
 # ---------------------------------------------------------------------------
 
-FIRESTORE_PROJECT = "gen-lang-client-0830900967"
+FIRESTORE_PROJECT = (
+    os.environ.get("OAKWELL_FIRESTORE_PROJECT")
+    or os.environ.get("FIRESTORE_PROJECT")
+    or os.environ.get("GOOGLE_CLOUD_PROJECT")
+    or os.environ.get("GCLOUD_PROJECT")
+    or "gen-lang-client-0830900967"
+)
 FIRESTORE_COLLECTION = "oakwell_deals"
 FIRESTORE_RUNS_COLLECTION = "oakwell_analysis_runs"
 
 _firestore_db: Optional[Any] = None  # google.cloud.firestore.Client or None
+_firestore_init_error: Optional[str] = None
+_firestore_status_reason: str = "ok"
 
 if _firestore_mod is not None:
     try:
@@ -129,6 +137,16 @@ if _firestore_mod is not None:
             FIRESTORE_PROJECT, FIRESTORE_COLLECTION, len(_ping),
         )
     except Exception as _fs_err:
+        _firestore_init_error = str(_fs_err)
+        _firestore_status_reason = f"Firestore init/ping failed: {_fs_err}"
+        logger.warning("Firestore init/ping failed — falling back to memory.json: %s", _fs_err)
+        _firestore_db = None
+else:
+    _firestore_init_error = "google-cloud-firestore is not installed"
+    _firestore_status_reason = "google-cloud-firestore is not installed."
+    logger.warning(
+        "google-cloud-firestore not installed — falling back to local memory.json"
+    )
         _firestore_status_reason = f"Firestore init/ping failed: {_fs_err}"
         logger.warning("%s", _firestore_status_reason)
         _firestore_db = None
@@ -2694,6 +2712,20 @@ async def health() -> Dict[str, Any]:
         "persistence_ready": persistence["durable_memory_ready"],
         "persistence_backend": persistence["persistence_backend"],
         "persistence_reason": persistence["persistence_reason"] or None,
+    }
+
+
+@app.get("/storage-status")
+async def storage_status(auth_ctx: AuthContext = Depends(_require_auth_context)) -> Dict[str, Any]:
+    """Return backend storage diagnostics for onboarding and support triage."""
+    return {
+        "owner_scope": auth_ctx.scope_id,
+        "storage_mode": "firestore" if _firestore_db is not None else "local_fallback",
+        "firestore_project": FIRESTORE_PROJECT,
+        "firestore_collection": FIRESTORE_COLLECTION,
+        "firestore_available": _firestore_db is not None,
+        "firestore_init_error": _firestore_init_error,
+        "firestore_status_reason": _firestore_status_reason,
     }
 
 

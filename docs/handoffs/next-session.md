@@ -18,7 +18,7 @@
    - login throttling / bot protection
 2. Deploy the new secure request path end-to-end:
    - Vercel: `OAKWELL_BACKEND_URL`, `OAKWELL_INTERNAL_API_SECRET`, Clerk envs
-   - Cloud Run: `OAKWELL_INTERNAL_API_SECRET`, `GOOGLE_API_KEY`, Clerk-related app envs as needed
+   - Cloud Run: `OAKWELL_INTERNAL_API_SECRET`, `GOOGLE_API_KEY`, `OAKWELL_FIRESTORE_PROJECT` (or `FIRESTORE_PROJECT` / `GOOGLE_CLOUD_PROJECT`), Clerk-related app envs as needed
 3. Redeploy Cloud Run with the latest `main.py` / `tools.py` fast-model update (`gemini-2.5-flash` default via `OAKWELL_FAST_MODEL`) so the live analysis path no longer depends on deprecated `gemini-2.0-flash`.
 4. Confirm the explicit GenAI auth patch is live in Cloud Run:
    - `tools.py` now resolves `GOOGLE_API_KEY` / `GEMINI_API_KEY` explicitly instead of relying on SDK auto-discovery
@@ -43,7 +43,7 @@
 - **Shared Page Ownership**: Do not point `/demo` route files at `/dashboard` route files again; both route groups should import shared non-route modules from `src/components/dashboard-pages`.
 - **Local Env Limitation**: This workspace currently lacks `GOOGLE_API_KEY`, so local end-to-end analysis cannot prove the new backend model path without external env setup.
 - **Cloud Run Validation**: A deploy can still look healthy while model auth is broken. Validate the explicit-key patch by running a real `/analyze-deal` request after redeploy, not just `/health`.
-- **Persistence Validation**: A healthy `/health` is not enough anymore; confirm `persistence_ready: true` and verify that a completed analysis is visible in `/memory` after a page reload.
+- **Storage Validation**: Use `/storage-status` (through `/api/backend/storage-status`) during onboarding validation to confirm `firestore_available=true` before expecting production War Room memory to populate.
 - **Evidence State Contract**: Deal results now expose `analysis_mode`, `evidence_status`, `evidence_summary`, `verification_reason`, `claim_count`, and `verified_claim_count`. Preserve those fields at the API seam and in new dashboard surfaces.
 - **Evidence Ledger Contract**: `/memory` and `/deal-status/{job_id}` now expose `analysis_run_id`, `analysis_completed_at`, `evidence_items`, and `source_coverage`. The new `/analysis-runs` endpoint is the immutable audit trail; the memory bank remains the latest rollup.
 - **No Silent Fallback Rule**: Production should not rely on `outputs/memory.json`. Only enable `OAKWELL_ALLOW_EPHEMERAL_MEMORY_FALLBACK=1` for explicit local/dev workflows.

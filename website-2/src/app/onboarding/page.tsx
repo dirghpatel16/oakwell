@@ -42,6 +42,7 @@ export default function OnboardingPage() {
   const [scanProgress, setScanProgress] = useState(0);
   const [scanStep, setScanStep] = useState("");
   const [scanLogs, setScanLogs] = useState<{ text: string; color: string; bold?: boolean }[]>([]);
+  const [scanBlockingReason, setScanBlockingReason] = useState<string | null>(null);
 
   const totalSteps = 5;
   const progress = (step / totalSteps) * 100;
@@ -72,6 +73,7 @@ export default function OnboardingPage() {
     abortRef.current = false;
     setScanLogs([]);
     setScanProgress(0);
+    setScanBlockingReason(null);
 
     // 1. Health check
     setScanStep("Checking Oakwell backend...");
@@ -93,6 +95,40 @@ export default function OnboardingPage() {
     }
 
     // 2. Analyze each competitor
+    setScanStep("Checking durable memory storage...");
+    addLog("[system] Checking durable memory connectivity...", "text-zinc-500");
+    try {
+      const storage = await api.getStorageStatus();
+      if (!storage.firestore_available) {
+        const reason =
+          storage.firestore_init_error ||
+          storage.firestore_status_reason ||
+          "Firestore is not reachable from the backend runtime";
+        addLog(
+          `[error] Durable memory unavailable (${storage.firestore_project}). ${reason}`,
+          "text-red-400",
+          true
+        );
+        addLog(
+          "[hint] Set OAKWELL_FIRESTORE_PROJECT to your real Firebase/GCP project and redeploy backend credentials.",
+          "text-amber-400"
+        );
+        setScanProgress(100);
+        setScanStep("Setup blocked — durable memory is unavailable");
+        setScanBlockingReason(reason);
+        return;
+      }
+      addLog(
+        `[system] ✓ Durable memory online (${storage.firestore_project}/${storage.firestore_collection})`,
+        "text-green-400"
+      );
+      setScanProgress(20);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Storage diagnostics unavailable";
+      addLog(`[warn] Could not verify durable memory: ${msg}`, "text-amber-400");
+    }
+
+    // 3. Analyze each competitor
     const validCompetitors = competitors.filter(c => c.domain.trim());
     if (validCompetitors.length === 0) {
       addLog("[system] No competitors with domains entered — skipping analysis", "text-amber-400");
@@ -102,7 +138,7 @@ export default function OnboardingPage() {
       return;
     }
 
-    const perCompetitor = 80 / validCompetitors.length;
+    const perCompetitor = 70 / validCompetitors.length;
     let completed = 0;
 
     for (const comp of validCompetitors) {
@@ -155,10 +191,10 @@ export default function OnboardingPage() {
       }
 
       completed++;
-      setScanProgress(10 + Math.round(completed * perCompetitor));
+      setScanProgress(20 + Math.round(completed * perCompetitor));
     }
 
-    // 3. Finish
+    // 4. Finish
     setScanProgress(95);
     setScanStep("Finalizing...");
     addLog("[risk] Generating risk scores and alerts...", "text-purple-400");
@@ -497,12 +533,21 @@ export default function OnboardingPage() {
                     )}
                   </div>
 
-                  {scanProgress >= 100 && (
-                    <button
-                      onClick={() => router.push("/dashboard")}
+                  {scanProgress >= 100 && !scanBlockingReason && (
+                    <a 
+                      href="/dashboard"
                       className="w-full py-3 bg-green-600 hover:bg-green-500 text-white rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-2"
                     >
                       Enter Your War Room <ArrowRight className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  {scanProgress >= 100 && scanBlockingReason && (
+                    <button
+                      onClick={startInitialScan}
+                      className="w-full py-3 bg-red-600 hover:bg-red-500 text-white rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+                    >
+                      Retry Storage Check <ArrowRight className="w-4 h-4" />
                     </button>
                   )}
                 </div>

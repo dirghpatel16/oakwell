@@ -78,36 +78,6 @@ export default function DealDeskPage() {
 
   const selectedDeal = selectedUrl ? deals.find((d) => d.url === selectedUrl) : null;
   const completedResult = jobStatus?.status === "completed" ? jobStatus.result : null;
-  const persistedCompletedDeal = completedResult?.competitor_url
-    ? deals.find((deal) => deal.url === completedResult.competitor_url)
-    : null;
-  const activeDeal = persistedCompletedDeal ?? selectedDeal;
-  const analysisRunsUrl = activeDeal?.url;
-  const {
-    data: analysisRuns,
-    loading: runsLoading,
-    error: runsError,
-    refresh: refreshRuns,
-  } = useAnalysisRuns(analysisRunsUrl);
-  const completionPersistencePending =
-    Boolean(completedResult) &&
-    Boolean(jobStatus?.job_id) &&
-    pendingPersistenceJobId === jobStatus?.job_id;
-  const validatingPersistence =
-    completionPersistencePending && memLoading && !persistedCompletedDeal && !memError;
-  const canGenerateCompletionEmail =
-    Boolean(jobStatus?.job_id) &&
-    activeDeal?.url === completedResult?.competitor_url;
-  const memoryUnavailableForAnalysis = Boolean(memError);
-  const memoryUnavailableMessage = memError
-    ? `${memError}. Oakwell requires durable memory before starting a production analysis.`
-    : null;
-
-  useEffect(() => {
-    if (workspace?.workspace?.company_name && !yourProduct) {
-      setYourProduct(workspace.workspace.company_name);
-    }
-  }, [workspace]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (jobStatus?.status !== "completed" || !jobStatus.job_id) return;
@@ -435,54 +405,7 @@ export default function DealDeskPage() {
           </div>
         )}
 
-        {completedResult && !showForm && validatingPersistence && (
-          <div className="p-6 max-w-3xl">
-            <DashboardLoadingState
-              icon={ShieldCheck}
-              title="Validating durable memory"
-              message="Oakwell finished the analysis. Confirming the record was written back to the memory bank before treating it as saved."
-            />
-          </div>
-        )}
-
-        {completedResult && !showForm && persistenceIssue && !persistedCompletedDeal && (
-          <div className="p-6 space-y-4 max-w-3xl">
-            <DashboardErrorBanner
-              title="Analysis completed but durable persistence failed"
-              message={persistenceIssue}
-              actionLabel="Retry Memory Sync"
-              onAction={refreshMemory}
-            />
-            <div className="rounded-2xl border border-zinc-800 bg-[#0a0a0a] px-6 py-8">
-              <h3 className="text-sm font-semibold text-white">Why Oakwell is stopping here</h3>
-              <p className="mt-2 text-sm leading-relaxed text-zinc-500">
-                Oakwell no longer treats transient job state as the source of truth. Once durable memory is healthy,
-                rerun the analysis or retry memory sync so the dashboard can trust the record across reloads and days.
-              </p>
-              <div className="mt-4 flex gap-3">
-                <button
-                  onClick={refreshMemory}
-                  className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-white"
-                >
-                  Retry Memory Sync
-                </button>
-                <button
-                  onClick={() => {
-                    setPersistenceIssue(null);
-                    setPendingPersistenceJobId(null);
-                    reset();
-                    setShowForm(true);
-                  }}
-                  className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-blue-500"
-                >
-                  Start New Analysis
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {completedResult && !persistedCompletedDeal && !showForm && !validatingPersistence && !persistenceIssue && (
+        {completedResult && !showForm && (
           <div className="p-6 space-y-6 max-w-3xl">
             <div className="flex items-start justify-between">
               <div>
@@ -517,13 +440,6 @@ export default function DealDeskPage() {
               claimCount={completedResult.claim_count}
               verifiedClaimCount={completedResult.verified_claim_count}
               proofAvailable={completedResult.proof_available || completedResult.all_proof_filenames.length > 0}
-            />
-
-            <SourceCoverageCard coverage={completedResult.source_coverage || []} />
-
-            <EvidenceLedgerCard
-              items={completedResult.evidence_items || []}
-              isDemo={isDemo}
             />
 
             <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4">
@@ -614,7 +530,7 @@ export default function DealDeskPage() {
           </div>
         )}
 
-        {activeDeal && (!completedResult || Boolean(persistedCompletedDeal)) && !showForm && (
+        {selectedDeal && !completedResult && !showForm && (
           <div className="p-6 space-y-6 max-w-3xl">
             <div className="flex items-start justify-between">
               <div>
