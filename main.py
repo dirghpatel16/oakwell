@@ -59,6 +59,7 @@ FIRESTORE_COLLECTION = "oakwell_deals"
 
 _firestore_db: Optional[Any] = None  # google.cloud.firestore.Client or None
 _firestore_init_error: Optional[str] = None
+_firestore_status_reason: str = "ok"
 
 if _firestore_mod is not None:
     try:
@@ -71,10 +72,12 @@ if _firestore_mod is not None:
         )
     except Exception as _fs_err:
         _firestore_init_error = str(_fs_err)
+        _firestore_status_reason = f"Firestore init/ping failed: {_fs_err}"
         logger.warning("Firestore init/ping failed — falling back to memory.json: %s", _fs_err)
         _firestore_db = None
 else:
     _firestore_init_error = "google-cloud-firestore is not installed"
+    _firestore_status_reason = "google-cloud-firestore is not installed."
     logger.warning(
         "google-cloud-firestore not installed — falling back to local memory.json"
     )
@@ -2113,6 +2116,7 @@ async def storage_status(auth_ctx: AuthContext = Depends(_require_auth_context))
         "firestore_collection": FIRESTORE_COLLECTION,
         "firestore_available": _firestore_db is not None,
         "firestore_init_error": _firestore_init_error,
+        "firestore_status_reason": _firestore_status_reason,
     }
 
 
