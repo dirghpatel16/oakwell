@@ -56,6 +56,7 @@ export interface StorageStatus {
   firestore_project: string;
   firestore_collection: string;
   firestore_available: boolean;
+  firestore_status_reason?: string | null;
   firestore_init_error?: string | null;
 }
 

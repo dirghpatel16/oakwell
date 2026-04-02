@@ -96,7 +96,10 @@ export default function OnboardingPage() {
     try {
       const storage = await api.getStorageStatus();
       if (!storage.firestore_available) {
-        const reason = storage.firestore_init_error || "Firestore is not reachable from the backend runtime";
+        const reason =
+          storage.firestore_init_error ||
+          storage.firestore_status_reason ||
+          "Firestore is not reachable from the backend runtime";
         addLog(
           `[error] Durable memory unavailable (${storage.firestore_project}). ${reason}`,
           "text-red-400",
