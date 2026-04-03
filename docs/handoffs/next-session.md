@@ -27,6 +27,8 @@
    - keep Firestore healthy
    - set `OAKWELL_ALLOW_EPHEMERAL_MEMORY_FALLBACK=0` in production
    - confirm `/health` reports `persistence_ready: true`
+   - confirm `/health` reports the correct `firestore_project` and `firestore_project_source`
+   - confirm `/storage-status` reports `firestore_boot_ping_ok: true` and `firestore_scope_probe_ok: true`
 6. Run two real production analyses so `/memory` is populated and the updated `/dashboard` flow can be validated end-to-end:
    - one proof-backed transcript with concrete public claims
    - one qualitative transcript that should route to `strategy_only`
@@ -34,9 +36,12 @@
    - `/analysis-runs?url=...` returns immutable run history
    - Deal Desk shows `source_coverage` and `evidence_items` after reload
    - previous analyses still appear the next day after Cloud Run instance churn
-8. Audit the remaining `/dashboard` screens (`forecast`, `executive`, `sidekick`) against real backend payloads.
-9. Once the data path is verified, wire up `websocket-context.tsx` to handle true Server-Sent Events (SSE) or backend event flow instead of simulated operation progress.
-10. Start an architecture pass on the durable backend moat: multi-page evidence retrieval, stronger competitive memory/RAG, and agent orchestration that is materially more defensible than a thin wrapper over frontier chat models.
+8. Validate the latest shell navigation hardening in production:
+   - sidebar links should still route normally even when `/dashboard/deals` is showing `Memory bank unavailable`
+   - confirm preview and production both leave the current page correctly and do not strand the user on Deal Desk
+9. Audit the remaining `/dashboard` screens (`forecast`, `executive`, `sidekick`) against real backend payloads.
+10. Once the data path is verified, wire up `websocket-context.tsx` to handle true Server-Sent Events (SSE) or backend event flow instead of simulated operation progress.
+11. Start an architecture pass on the durable backend moat: multi-page evidence retrieval, stronger competitive memory/RAG, and agent orchestration that is materially more defensible than a thin wrapper over frontier chat models.
 
 ## Watch out for
 - **Route Prefixing**: Links in the sidebar/shell must use the `basePath` prop from `DashboardShell` to avoid crossing between `/dashboard` and `/demo`.
@@ -44,6 +49,9 @@
 - **Local Env Limitation**: This workspace currently lacks `GOOGLE_API_KEY`, so local end-to-end analysis cannot prove the new backend model path without external env setup.
 - **Cloud Run Validation**: A deploy can still look healthy while model auth is broken. Validate the explicit-key patch by running a real `/analyze-deal` request after redeploy, not just `/health`.
 - **Storage Validation**: Use `/storage-status` (through `/api/backend/storage-status`) during onboarding validation to confirm `firestore_available=true` before expecting production War Room memory to populate.
+- **Firestore Targeting**: Do not trust the old hardcoded fallback project. Production should always set `OAKWELL_FIRESTORE_PROJECT` explicitly, and the value must point to a GCP/Firebase project that already has a Firestore database.
+- **Persistence Validation**: A healthy `/health` is not enough anymore; confirm `persistence_ready: true` and verify that a completed analysis is visible in `/memory` after a page reload.
+- **Navigation Regression Risk**: The fail-loud memory banner is intended. If sidebar links stop routing after that banner appears, verify the deployed `dashboard-shell.tsx` includes the explicit router push + `window.location.assign` fallback.
 - **Evidence State Contract**: Deal results now expose `analysis_mode`, `evidence_status`, `evidence_summary`, `verification_reason`, `claim_count`, and `verified_claim_count`. Preserve those fields at the API seam and in new dashboard surfaces.
 - **Evidence Ledger Contract**: `/memory` and `/deal-status/{job_id}` now expose `analysis_run_id`, `analysis_completed_at`, `evidence_items`, and `source_coverage`. The new `/analysis-runs` endpoint is the immutable audit trail; the memory bank remains the latest rollup.
 - **No Silent Fallback Rule**: Production should not rely on `outputs/memory.json`. Only enable `OAKWELL_ALLOW_EPHEMERAL_MEMORY_FALLBACK=1` for explicit local/dev workflows.

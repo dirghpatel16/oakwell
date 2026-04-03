@@ -11,7 +11,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { useWebSocket } from "@/lib/websocket-context";
-import { useMemory, useWinningPatterns, useSentinelStatus } from "@/lib/hooks";
+import { useMemory, useWinningPatterns, useSentinelStatus, useStorageStatus } from "@/lib/hooks";
 import { useDashboardSurface } from "@/components/dashboard-shell";
 import { DashboardEmptyState, DashboardErrorBanner, DashboardLoadingState } from "@/components/dashboard-state";
 
@@ -20,6 +20,7 @@ export default function WarRoomPage() {
   const { data: memory, loading: memLoading, error: memError, refresh: refreshMemory } = useMemory();
   const { data: patterns } = useWinningPatterns();
   const { data: sentinel } = useSentinelStatus();
+  const { data: storageStatus, refresh: refreshStorageStatus } = useStorageStatus();
   const { basePath, isDemoSurface } = useDashboardSurface();
   const lastSyncLabel = lastSync
     ? lastSync.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
@@ -107,6 +108,23 @@ export default function WarRoomPage() {
           message={`${memError}. The War Room only reflects durable backend memory, so Oakwell is surfacing the storage issue instead of showing a misleading reset.`}
           actionLabel="Retry"
           onAction={refreshMemory}
+        />
+      ) : null}
+
+      {!memError && storageStatus && storageStatus.persistence_ready === false ? (
+        <DashboardErrorBanner
+          title="Backend online, but durable memory is unavailable"
+          message={[
+            storageStatus.persistence_reason || "Firestore storage is unavailable.",
+            storageStatus.firestore_project
+              ? `Project: ${storageStatus.firestore_project}`
+              : "",
+            storageStatus.firestore_project_source
+              ? `Source: ${storageStatus.firestore_project_source}`
+              : "",
+          ].filter(Boolean).join(" ")}
+          actionLabel="Re-check storage"
+          onAction={refreshStorageStatus}
         />
       ) : null}
 

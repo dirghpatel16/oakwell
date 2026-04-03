@@ -1,5 +1,28 @@
 # Recent Changes
 
+## 2026-04-03
+### Summary
+Hardened Firestore production readiness so Oakwell fails loud with operator-readable diagnostics instead of silently resolving to the wrong GCP project. The backend now reports the effective Firestore project, where it came from, whether ADC credentials were discovered, whether the startup ping passed, and whether owner-scoped reads are healthy. Onboarding and War Room now surface “backend online but durable memory unavailable” honestly.
+
+### Files touched
+- `main.py`: Removed the unsafe hardcoded Firestore project fallback, added ADC/project diagnostics, cached scoped-read probe results, expanded `/health` and `/storage-status`, and made workspace readiness endpoints expose storage readiness.
+- `website-2/src/lib/api.ts`: Expanded `HealthStatus`, `StorageStatus`, and workspace-setup typings to carry richer storage diagnostics.
+- `website-2/src/lib/hooks.ts`: Added `useStorageStatus()` for dashboard truth surfaces.
+- `website-2/src/app/onboarding/page.tsx`: Blocks onboarding completion when storage readiness cannot be verified or durable memory is unavailable, with clearer remediation hints.
+- `website-2/src/components/dashboard-pages/war-room-page.tsx`: Shows an honest degraded-storage banner even when the backend is online but Firestore is unhealthy.
+- `.env.example`
+- `docs/security/public-launch-checklist.md`
+- `docs/handoffs/current-state.md`
+- `docs/handoffs/next-session.md`
+- `docs/known-issues.md`
+
+### Why
+Production health was showing `Firestore init/ping failed: 404 The database (default) does not exist for project gen-lang-client-0830900967`, which strongly indicated the serving Cloud Run revision was resolving Firestore against the wrong project. Oakwell needed clearer diagnostics and a safer project-selection path so operators can see immediately whether the problem is project targeting, missing Firestore database provisioning, or service-account access.
+
+### Risks / follow-ups
+- **Follow-up**: Cloud Run still must be updated operationally: set `OAKWELL_FIRESTORE_PROJECT` on the serving revision, ensure the target project has Firestore provisioned, and confirm the service account has Datastore/Firestore access.
+- **Follow-up**: `/health` is intentionally public and therefore only reports the last scoped-read probe result, not a fresh per-user check. Use `/storage-status` for the definitive current scope validation.
+
 ## 2026-04-02
 ### Summary
 Implemented Workspace Personas & Context-Aware Intelligence. Oakwell now persists a per-user/org profile (company name, value proposition, user role, target buyers, competitors) and injects it into every AI specialist prompt on each analysis run — making the platform context-aware without the user needing to re-enter their identity on every request. Added a first-login onboarding redirect, live Settings persistence, and auto-fill of the "Your Product" field in Deal Desk.
@@ -26,7 +49,21 @@ Oakwell was stateless — the AI had no knowledge of who it was working for. Eve
 - **Follow-up**: The `oakwell_workspace_configured` cookie is client-set; consider moving to a server-set HttpOnly cookie for stronger security before public launch.
 - **Follow-up**: `user_role` is in the workspace context string but specialists don't branch on it explicitly — the model infers tone from context. A future pass could add role-specific output sections.
 
+## 2026-04-02
+### Summary
+Fixed a dashboard navigation regression where sidebar links could appear clickable but fail to route away from `/dashboard/deals` once the loud `Memory bank unavailable` state was active. The fail-loud persistence behavior remains intact; the shell now hardens route changes themselves.
 
+### Files touched
+- `website-2/src/components/dashboard-shell.tsx`: Added explicit client-router navigation plus a same-origin document navigation fallback for sidebar links when soft navigation stalls.
+- `docs/handoffs/current-state.md`
+- `docs/handoffs/next-session.md`
+
+### Why
+The persistence fix correctly surfaced durable-memory problems, but the shared sidebar still depended entirely on App Router soft navigation. In preview/production that could strand users on Deal Desk after the error banner appeared, making the whole dashboard feel broken even though the intended issue was only memory health.
+
+### Risks / follow-ups
+- **Follow-up**: Verify the latest Vercel deployment is on the commit containing the shell fallback, because older preview URLs can still show the routing stall.
+- **Follow-up**: If routing still stalls after this deploy, capture the browser console/network trace; at that point the remaining suspect is a route-level runtime exception rather than click interception.
 
 ## 2026-04-01
 ### Summary

@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import React, { createContext, useContext, useMemo, useState } from "react";
 import {
   Home,
@@ -166,9 +166,39 @@ export default function DashboardShell({ children, basePath, userSlot, showDemoB
 
 // Minimal Navigation Item Component
 function NavItem({ href, icon, label, active = false }: { href: string; icon: React.ReactNode; label: string; active?: boolean }) {
+  const pathname = usePathname();
+  const router = useRouter();
+
+  const handleClick = React.useCallback((event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return;
+    }
+
+    if (pathname === href) {
+      return;
+    }
+
+    event.preventDefault();
+    router.push(href);
+
+    window.setTimeout(() => {
+      if (window.location.pathname !== href) {
+        window.location.assign(href);
+      }
+    }, 500);
+  }, [href, pathname, router]);
+
   return (
     <Link
       href={href}
+      onClick={handleClick}
       className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${
         active
           ? "bg-zinc-900 text-white font-medium shadow-sm border border-zinc-800/50"

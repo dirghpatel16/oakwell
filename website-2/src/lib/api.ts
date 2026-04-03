@@ -48,6 +48,19 @@ export interface HealthStatus {
   persistence_ready?: boolean;
   persistence_backend?: string;
   persistence_reason?: string | null;
+  firestore_project?: string | null;
+  firestore_project_source?: string | null;
+  firestore_available?: boolean;
+  firestore_boot_ping_ok?: boolean;
+  firestore_boot_ping_error?: string | null;
+  firestore_scope_probe_scope?: string | null;
+  firestore_scope_probe_ok?: boolean | null;
+  firestore_scope_probe_error?: string | null;
+  adc_credentials_present?: boolean;
+  adc_project_id?: string | null;
+  adc_credential_type?: string | null;
+  adc_service_account_email?: string | null;
+  adc_error?: string | null;
 }
 
 export interface EvidenceItem {
@@ -107,11 +120,26 @@ export interface WinningPatterns {
 }
 
 export interface StorageStatus {
-  owner_scope: string;
-  storage_mode: "firestore" | "local_fallback";
+  owner_scope?: string | null;
+  storage_mode: "firestore" | "local_fallback" | "unavailable";
+  persistence_backend?: string;
+  persistence_ready?: boolean;
+  persistence_reason?: string | null;
   firestore_project: string;
+  firestore_project_source?: string | null;
   firestore_collection: string;
   firestore_available: boolean;
+  firestore_boot_ping_ok?: boolean;
+  firestore_boot_ping_error?: string | null;
+  firestore_scope_probe_scope?: string | null;
+  firestore_scope_probe_ok?: boolean | null;
+  firestore_scope_probe_error?: string | null;
+  adc_credentials_present?: boolean;
+  adc_project_id?: string | null;
+  adc_credential_type?: string | null;
+  adc_service_account_email?: string | null;
+  adc_error?: string | null;
+  ephemeral_fallback_enabled?: boolean;
   firestore_status_reason?: string | null;
   firestore_init_error?: string | null;
 }
@@ -231,6 +259,7 @@ export interface WorkspacePersona {
 export interface WorkspaceResponse {
   configured: boolean;
   workspace?: WorkspacePersona;
+  storage_ready?: boolean;
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -523,12 +552,34 @@ async function request<T>(
 // API functions
 // ---------------------------------------------------------------------------
 
+export interface MemoryResponse {
+  memory: MemoryBank;
+  persistenceDegraded: boolean;
+  persistenceReason: string | null;
+}
+
 /** Fetch the full Neural Memory Bank */
-export async function getMemory(): Promise<MemoryBank> {
-  const memory = await request<Record<string, unknown>>("/memory");
-  return Object.fromEntries(
-    Object.entries(memory).map(([url, entry]) => [url, normalizeMemoryEntry(entry)])
+export async function getMemory(): Promise<MemoryResponse> {
+  const raw = await request<Record<string, unknown>>("/memory");
+  const persistenceDegraded = Boolean(raw._persistence_degraded);
+  const persistenceReason =
+    typeof raw._persistence_reason === "string" ? raw._persistence_reason : null;
+
+  // Strip metadata keys before normalizing memory entries
+  const memoryEntries = Object.fromEntries(
+    Object.entries(raw).filter(
+      ([key]) => !key.startsWith("_persistence_")
+    )
   );
+
+  const memory: MemoryBank = Object.fromEntries(
+    Object.entries(memoryEntries).map(([url, entry]) => [
+      url,
+      normalizeMemoryEntry(entry),
+    ])
+  );
+
+  return { memory, persistenceDegraded, persistenceReason };
 }
 
 /** Health check */
@@ -625,8 +676,8 @@ export async function getWorkspace(): Promise<WorkspaceResponse> {
 }
 
 /** Lightweight check — has this user configured a workspace? */
-export async function getWorkspaceSetupStatus(): Promise<{ configured: boolean }> {
-  return request<{ configured: boolean }>("/workspace-setup");
+export async function getWorkspaceSetupStatus(): Promise<{ configured: boolean; storage_ready?: boolean; storage_reason?: string | null }> {
+  return request<{ configured: boolean; storage_ready?: boolean; storage_reason?: string | null }>("/workspace-setup");
 }
 
 /** Save or update the workspace persona */

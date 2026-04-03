@@ -6,6 +6,9 @@
 - **Durable Memory Requirement**: Oakwell now expects Firestore to be healthy in production and should no longer silently rely on `outputs/memory.json`.
 - **Impact**: If Firestore is unavailable, `/analyze-deal` and `/memory` will now fail loudly with a 503 instead of pretending data is durably saved.
 - **Workaround**: Keep `OAKWELL_ALLOW_EPHEMERAL_MEMORY_FALLBACK=0` in production and only enable it explicitly for local/dev workflows.
+- **Firestore Project Mis-targeting**: If Cloud Run does not set `OAKWELL_FIRESTORE_PROJECT` on the serving revision, Oakwell can fall back to ADC project detection and point at the wrong GCP project.
+- **Impact**: `/health` can show `Firestore init/ping failed: 404 The database (default) does not exist...` even though the backend itself is online.
+- **Workaround**: Set `OAKWELL_FIRESTORE_PROJECT` explicitly on the active Cloud Run revision, ensure that project has Firestore provisioned, and verify `/api/backend/storage-status` reports the correct project/source.
 - **Run History Deploy Pending**: The new immutable `/analysis-runs` + evidence ledger path still needs live deployment validation.
 - **Impact**: Until Cloud Run and Vercel pick up the latest code, Deal Desk in production may still show only the latest rollup without recent run history or source coverage.
 - **Workaround**: Redeploy both app layers together, then confirm `/analysis-runs?url=...` returns persisted run records for a real competitor.
@@ -25,6 +28,9 @@
 - **Persistence Confirmation Gap Closed**: Deal Desk now validates that completed analyses round-trip back through `/memory` before treating them as saved.
 - **Impact**: Users will now see a deliberate persistence failure state instead of a misleading “analysis complete” view when storage is degraded.
 - **Workaround**: Fix Firestore / production persistence and rerun analysis; do not rely on transient in-memory job state as proof of save.
+- **Sidebar Nav Requires Latest Shell Deploy**: The dashboard sidebar now includes a same-origin navigation fallback so users can still leave Deal Desk when the loud memory-health banner is active.
+- **Impact**: Older preview deployments may look “frozen” on `/dashboard/deals` even though the real issue is memory health plus stale shell code.
+- **Workaround**: Use the latest preview/production deployment that includes the `dashboard-shell.tsx` navigation hardening commit.
 - **API Contract Drift**: The frontend still assumes string fields in several places, but the backend returns structured data for fields like `clashes_detected`, `market_drift`, and `adversarial_critique`.
 - **Impact**: Pages may render poorly or error once real production analysis data appears.
 - **Workaround**: Normalize backend payloads at the API boundary in `website-2/src/lib/api.ts` before they reach dashboard pages.

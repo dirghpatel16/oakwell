@@ -18,7 +18,6 @@ import {
   DEMO_EMAIL,
 } from "./demo-data";
 import type {
-  MemoryBank,
   SentinelStatus,
   WinningPatterns,
   DealStatusResponse,
@@ -118,12 +117,23 @@ const DEMO_WORKSPACE: api.WorkspaceResponse = {
 /** Fetch the entire Neural Memory Bank — refreshes every 30s */
 export function useMemory(refreshInterval = 30_000) {
   const { isDemo } = useDemoMode();
-  return useQuery<MemoryBank>(
+  const raw = useQuery<api.MemoryResponse>(
     () => api.getMemory(),
     [isDemo],
     refreshInterval,
-    isDemo ? DEMO_MEMORY : undefined
+    isDemo
+      ? { memory: DEMO_MEMORY, persistenceDegraded: false, persistenceReason: null }
+      : undefined
   );
+
+  return {
+    data: raw.data?.memory ?? null,
+    loading: raw.loading,
+    error: raw.error,
+    refresh: raw.refresh,
+    persistenceDegraded: raw.data?.persistenceDegraded ?? false,
+    persistenceReason: raw.data?.persistenceReason ?? null,
+  };
 }
 
 /** Sentinel watcher status */
@@ -180,6 +190,32 @@ export function useHealth(refreshInterval = 15_000) {
     [isDemo],
     refreshInterval,
     isDemo ? DEMO_HEALTH_STATUS : undefined
+  );
+}
+
+/** Detailed storage readiness diagnostics for dashboard truth surfaces */
+export function useStorageStatus(refreshInterval = 30_000) {
+  const { isDemo } = useDemoMode();
+  return useQuery<api.StorageStatus>(
+    () => api.getStorageStatus(),
+    [isDemo],
+    refreshInterval,
+    isDemo
+      ? {
+          owner_scope: "demo:acme",
+          storage_mode: "firestore",
+          persistence_backend: "firestore",
+          persistence_ready: true,
+          persistence_reason: null,
+          firestore_project: "oakwell-demo",
+          firestore_project_source: "demo",
+          firestore_collection: "oakwell_deals",
+          firestore_available: true,
+          firestore_boot_ping_ok: true,
+          firestore_scope_probe_ok: true,
+          adc_credentials_present: true,
+        }
+      : undefined
   );
 }
 
