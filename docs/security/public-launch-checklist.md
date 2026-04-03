@@ -22,8 +22,12 @@ Use this before making Oakwell public or exposing the production dashboard to re
 
 ## Cloud Run / FastAPI
 - Set `OAKWELL_INTERNAL_API_SECRET` to the same value used by Vercel.
-- Set `GOOGLE_API_KEY` server-side only.
+- Set `GOOGLE_API_KEY` or `GEMINI_API_KEY` server-side only.
+- Set `OAKWELL_FIRESTORE_PROJECT` to the exact GCP/Firebase project that already has a Firestore database.
+- Keep `OAKWELL_ALLOW_EPHEMERAL_MEMORY_FALLBACK=0` in production.
 - Restrict `OAKWELL_ALLOWED_ORIGINS` to the actual frontend origins.
+- Confirm the Cloud Run service account has `Cloud Datastore User` / Firestore access and `Secret Manager Secret Accessor`.
+- Confirm the target GCP project already has a Firestore / Datastore database provisioned.
 - Confirm no endpoint serving customer data is reachable without the internal secret.
 - Confirm rate limiting is active on `analyze-deal`, `live-snippet`, `generate-email`, and `record-outcome`.
 

@@ -11,6 +11,7 @@ import {
   Check,
   FileText,
   ShieldCheck,
+  AlertTriangle,
   Database,
   Clock3,
   ExternalLink,
@@ -24,7 +25,7 @@ import { getProofUrl } from "@/lib/api";
 import { DashboardEmptyState, DashboardErrorBanner, DashboardLoadingState } from "@/components/dashboard-state";
 
 export default function DealDeskPage() {
-  const { data: memory, loading: memLoading, error: memError, refresh: refreshMemory } = useMemory();
+  const { data: memory, loading: memLoading, error: memError, refresh: refreshMemory, persistenceDegraded, persistenceReason } = useMemory();
   const { analyze, jobStatus, isRunning, error: analysisError, reset } = useDealAnalysis();
   const { email, loading: emailLoading, generate: generateEmail } = useEmailGeneration();
   const { data: workspace } = useWorkspace();
@@ -78,6 +79,40 @@ export default function DealDeskPage() {
 
   const selectedDeal = selectedUrl ? deals.find((d) => d.url === selectedUrl) : null;
   const completedResult = jobStatus?.status === "completed" ? jobStatus.result : null;
+  const persistedCompletedDeal = completedResult?.competitor_url
+    ? deals.find((deal) => deal.url === completedResult.competitor_url)
+    : null;
+  const activeDeal = persistedCompletedDeal ?? selectedDeal;
+  const analysisRunsUrl = activeDeal?.url;
+  const {
+    data: analysisRuns,
+    loading: runsLoading,
+    error: runsError,
+    refresh: refreshRuns,
+  } = useAnalysisRuns(analysisRunsUrl);
+  const completionPersistencePending =
+    Boolean(completedResult) &&
+    Boolean(jobStatus?.job_id) &&
+    pendingPersistenceJobId === jobStatus?.job_id;
+  const validatingPersistence =
+    completionPersistencePending && memLoading && !persistedCompletedDeal && !memError;
+  const canGenerateCompletionEmail =
+    Boolean(jobStatus?.job_id) &&
+    activeDeal?.url === completedResult?.competitor_url;
+
+  // Hard block only on network-level errors (fetch failed entirely).
+  // Degraded persistence (Firestore down but API reachable) shows a
+  // warning instead of blocking the whole page.
+  const memoryHardError = Boolean(memError);
+  const memoryDegraded = persistenceDegraded && !memError;
+  const memoryUnavailableForAnalysis = memoryHardError;
+  const memoryUnavailableMessage = memError
+    ? `${memError}. Oakwell requires durable memory before starting a production analysis.`
+    : null;
+  const memoryDegradedMessage = memoryDegraded
+    ? (persistenceReason || "Memory backend is recovering. Analysis results may not persist across reloads.")
+    : null;
+  const resolvedYourProduct = yourProduct || workspace?.workspace?.company_name?.trim() || "";
 
   useEffect(() => {
     if (jobStatus?.status !== "completed" || !jobStatus.job_id) return;
@@ -144,7 +179,7 @@ export default function DealDeskPage() {
       transcript,
       competitor_url: competitorUrl,
       competitor_name: competitorName || undefined,
-      your_product: yourProduct || undefined,
+      your_product: resolvedYourProduct || undefined,
       deal_stage: dealStage as "discovery" | "technical_eval" | "proposal" | "negotiation" | "closing",
       deal_value: dealValue ? parseFloat(dealValue) : undefined,
     });
@@ -203,11 +238,11 @@ export default function DealDeskPage() {
                 message="Pulling competitor records, score history, and proof artifacts from the Oakwell memory bank."
               />
             </div>
-          ) : memError && deals.length === 0 ? (
+          ) : memoryHardError && deals.length === 0 ? (
             <div className="p-4">
               <DashboardErrorBanner
                 title="Memory bank unavailable"
-                message={`${memError}. Oakwell is refusing to pretend local session data is durable memory.`}
+                message={`${memError}. Check your connection and retry.`}
                 actionLabel="Retry"
                 onAction={refreshMemory}
               />
@@ -283,7 +318,7 @@ export default function DealDeskPage() {
                   <input
                     type="text"
                     placeholder="e.g. Oakwell"
-                    value={yourProduct}
+                    value={resolvedYourProduct}
                     onChange={(e) => setYourProduct(e.target.value)}
                     className="w-full h-10 bg-zinc-900/50 border border-zinc-800 rounded-lg px-3 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
                   />
@@ -339,10 +374,34 @@ export default function DealDeskPage() {
                   onAction={refreshMemory}
                 />
               )}
+              {memoryDegradedMessage && !memoryUnavailableMessage && (
+                <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span className="text-xs font-semibold text-amber-300">Degraded mode</span>
+                  </div>
+                  <p className="text-[11px] text-zinc-400 leading-relaxed">
+                    {memoryDegradedMessage}
+                    {" "}Analysis will run, but results may not persist after page reload until the memory backend recovers.
+                  </p>
+                  <button
+                    onClick={refreshMemory}
+                    className="text-[10px] font-medium text-amber-400 hover:text-amber-300 underline underline-offset-2"
+                  >
+                    Retry connection
+                  </button>
+                </div>
+              )}
               <button
                 onClick={handleAnalyze}
                 disabled={isRunning || !transcript || !competitorUrl || memoryUnavailableForAnalysis}
-                className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+                className={`w-full py-2.5 text-white rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-2 ${
+                  memoryUnavailableForAnalysis
+                    ? "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+                    : memoryDegraded
+                      ? "bg-amber-600 hover:bg-amber-500 disabled:bg-zinc-800 disabled:text-zinc-500"
+                      : "bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 disabled:text-zinc-500"
+                }`}
               >
                 {isRunning ? (
                   <>
@@ -351,6 +410,10 @@ export default function DealDeskPage() {
                 ) : memoryUnavailableForAnalysis ? (
                   <>
                     <ShieldCheck className="w-4 h-4" /> Memory Unavailable
+                  </>
+                ) : memoryDegraded ? (
+                  <>
+                    <AlertTriangle className="w-4 h-4" /> Run Analysis (Degraded)
                   </>
                 ) : (
                   <>
@@ -405,7 +468,54 @@ export default function DealDeskPage() {
           </div>
         )}
 
-        {completedResult && !showForm && (
+        {completedResult && !showForm && validatingPersistence && (
+          <div className="p-6 max-w-3xl">
+            <DashboardLoadingState
+              icon={ShieldCheck}
+              title="Validating durable memory"
+              message="Oakwell finished the analysis. Confirming the record was written back to the memory bank before treating it as saved."
+            />
+          </div>
+        )}
+
+        {completedResult && !showForm && persistenceIssue && !persistedCompletedDeal && (
+          <div className="p-6 space-y-4 max-w-3xl">
+            <DashboardErrorBanner
+              title="Analysis completed but durable persistence failed"
+              message={persistenceIssue}
+              actionLabel="Retry Memory Sync"
+              onAction={refreshMemory}
+            />
+            <div className="rounded-2xl border border-zinc-800 bg-[#0a0a0a] px-6 py-8">
+              <h3 className="text-sm font-semibold text-white">Why Oakwell is stopping here</h3>
+              <p className="mt-2 text-sm leading-relaxed text-zinc-500">
+                Oakwell no longer treats transient job state as the source of truth. Once durable memory is healthy,
+                rerun the analysis or retry memory sync so the dashboard can trust the record across reloads and days.
+              </p>
+              <div className="mt-4 flex gap-3">
+                <button
+                  onClick={refreshMemory}
+                  className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-white"
+                >
+                  Retry Memory Sync
+                </button>
+                <button
+                  onClick={() => {
+                    setPersistenceIssue(null);
+                    setPendingPersistenceJobId(null);
+                    reset();
+                    setShowForm(true);
+                  }}
+                  className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-blue-500"
+                >
+                  Start New Analysis
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {completedResult && !persistedCompletedDeal && !showForm && !validatingPersistence && !persistenceIssue && (
           <div className="p-6 space-y-6 max-w-3xl">
             <div className="flex items-start justify-between">
               <div>
@@ -530,7 +640,7 @@ export default function DealDeskPage() {
           </div>
         )}
 
-        {selectedDeal && !completedResult && !showForm && (
+        {activeDeal && !completedResult && !showForm && (
           <div className="p-6 space-y-6 max-w-3xl">
             <div className="flex items-start justify-between">
               <div>

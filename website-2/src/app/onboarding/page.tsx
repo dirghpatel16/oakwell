@@ -1,6 +1,5 @@
 "use client";
 import React, { useState, useRef } from "react";
-import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   ArrowLeft,
@@ -25,7 +24,6 @@ interface CompetitorEntry {
 }
 
 export default function OnboardingPage() {
-  const router = useRouter();
   const [step, setStep] = useState<OnboardingStep>(1);
   const [companyName, setCompanyName] = useState("");
   const [valueProp, setValueProp] = useState("");
@@ -99,20 +97,28 @@ export default function OnboardingPage() {
     addLog("[system] Checking durable memory connectivity...", "text-zinc-500");
     try {
       const storage = await api.getStorageStatus();
-      if (!storage.firestore_available) {
+      if (!storage.persistence_ready) {
         const reason =
+          storage.persistence_reason ||
+          storage.firestore_scope_probe_error ||
           storage.firestore_init_error ||
           storage.firestore_status_reason ||
           "Firestore is not reachable from the backend runtime";
         addLog(
-          `[error] Durable memory unavailable (${storage.firestore_project}). ${reason}`,
+          `[error] Durable memory unavailable (${storage.firestore_project || "unconfigured"} via ${storage.firestore_project_source || "unknown source"}). ${reason}`,
           "text-red-400",
           true
         );
         addLog(
-          "[hint] Set OAKWELL_FIRESTORE_PROJECT to your real Firebase/GCP project and redeploy backend credentials.",
+          "[hint] Verify OAKWELL_FIRESTORE_PROJECT points to a project that already has a Firestore database, then redeploy Cloud Run.",
           "text-amber-400"
         );
+        if (storage.adc_service_account_email) {
+          addLog(
+            `[hint] Cloud Run is using service account ${storage.adc_service_account_email}. Ensure it has Cloud Datastore / Firestore access.`,
+            "text-amber-400"
+          );
+        }
         setScanProgress(100);
         setScanStep("Setup blocked — durable memory is unavailable");
         setScanBlockingReason(reason);
@@ -125,7 +131,15 @@ export default function OnboardingPage() {
       setScanProgress(20);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Storage diagnostics unavailable";
-      addLog(`[warn] Could not verify durable memory: ${msg}`, "text-amber-400");
+      addLog(`[error] Could not verify durable memory readiness: ${msg}`, "text-red-400", true);
+      addLog(
+        "[hint] Do not finish onboarding until /api/backend/storage-status reports persistence_ready=true.",
+        "text-amber-400"
+      );
+      setScanProgress(100);
+      setScanStep("Setup blocked — storage diagnostics unavailable");
+      setScanBlockingReason(msg);
+      return;
     }
 
     // 3. Analyze each competitor
@@ -539,7 +553,7 @@ export default function OnboardingPage() {
                       className="w-full py-3 bg-green-600 hover:bg-green-500 text-white rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-2"
                     >
                       Enter Your War Room <ArrowRight className="w-4 h-4" />
-                    </button>
+                    </a>
                   )}
 
                   {scanProgress >= 100 && scanBlockingReason && (

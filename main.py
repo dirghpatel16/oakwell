@@ -27,6 +27,11 @@ except ImportError:
     _firestore_mod = None  # type: ignore[assignment]
 
 try:
+    import google.auth as _google_auth_mod
+except ImportError:
+    _google_auth_mod = None  # type: ignore[assignment]
+
+try:
     from google.cloud.firestore_v1.base_query import FieldFilter as _FieldFilter
 except ImportError:
     _FieldFilter = None  # type: ignore[assignment]
@@ -50,6 +55,17 @@ logger = logging.getLogger("oakwell-api")
 rate_limit_buckets: Dict[str, List[float]] = {}
 ALLOW_EPHEMERAL_MEMORY_FALLBACK = os.environ.get("OAKWELL_ALLOW_EPHEMERAL_MEMORY_FALLBACK") == "1"
 _firestore_status_reason = ""
+_firestore_project_source = "unconfigured"
+_firestore_boot_ping_ok = False
+_firestore_boot_ping_error: Optional[str] = None
+_firestore_last_scope_probe_scope: Optional[str] = None
+_firestore_last_scope_probe_ok: Optional[bool] = None
+_firestore_last_scope_probe_error: Optional[str] = None
+_adc_credentials_present = False
+_adc_project_id: Optional[str] = None
+_adc_error: Optional[str] = None
+_adc_credential_type: Optional[str] = None
+_adc_service_account_email: Optional[str] = None
 
 
 class PersistenceUnavailableError(RuntimeError):
@@ -58,7 +74,8 @@ class PersistenceUnavailableError(RuntimeError):
 
 def _persistence_status() -> Dict[str, Any]:
     """Return the current backend persistence posture without leaking secrets."""
-    if _firestore_db is not None:
+    scope_probe_healthy = _firestore_last_scope_probe_ok is not False
+    if _firestore_db is not None and scope_probe_healthy:
         return {
             "firestore_ready": True,
             "durable_memory_ready": True,
@@ -66,9 +83,12 @@ def _persistence_status() -> Dict[str, Any]:
             "persistence_reason": "",
         }
 
-    reason = _firestore_status_reason or "Firestore is unavailable."
+    if _firestore_db is not None and _firestore_last_scope_probe_ok is False:
+        reason = _firestore_last_scope_probe_error or "Owner-scoped Firestore reads are failing."
+    else:
+        reason = _firestore_status_reason or "Firestore is unavailable."
     return {
-        "firestore_ready": False,
+        "firestore_ready": _firestore_db is not None,
         "durable_memory_ready": False,
         "persistence_backend": "ephemeral_json" if ALLOW_EPHEMERAL_MEMORY_FALLBACK else "unavailable",
         "persistence_reason": reason,
@@ -96,30 +116,127 @@ def _owner_scope_filtered_query(collection: str, owner_scope: str) -> Any:
     return collection_ref.where("owner_scope", "==", owner_scope)
 
 
+def _run_scope_probe(owner_scope: str) -> None:
+    """Run a real owner-scoped Firestore read and cache the latest result for diagnostics."""
+    global _firestore_last_scope_probe_scope
+    global _firestore_last_scope_probe_ok
+    global _firestore_last_scope_probe_error
+
+    _firestore_last_scope_probe_scope = owner_scope
+    if _firestore_db is None:
+        _firestore_last_scope_probe_ok = False
+        _firestore_last_scope_probe_error = _firestore_status_reason or "Firestore is unavailable."
+        raise PersistenceUnavailableError(_firestore_last_scope_probe_error)
+
+    try:
+        query = _owner_scope_filtered_query(FIRESTORE_COLLECTION, owner_scope)
+        list(query.limit(1).stream())
+        _firestore_last_scope_probe_ok = True
+        _firestore_last_scope_probe_error = None
+    except Exception as exc:
+        message = f"Durable memory query failed for scope {owner_scope}: {exc}"
+        _firestore_last_scope_probe_ok = False
+        _firestore_last_scope_probe_error = message
+        raise PersistenceUnavailableError(message) from exc
+
+
 def _require_scope_memory_query_ready(owner_scope: str) -> None:
     """Validate that owner-scoped memory reads are operational, not just boot-initialized."""
     _require_durable_memory()
     if ALLOW_EPHEMERAL_MEMORY_FALLBACK:
         return
+    _run_scope_probe(owner_scope)
+
+
+def _detect_adc_state() -> None:
+    """Capture non-secret ADC diagnostics for operator-facing health checks."""
+    global _adc_credentials_present
+    global _adc_project_id
+    global _adc_error
+    global _adc_credential_type
+    global _adc_service_account_email
+
+    if _google_auth_mod is None:
+        _adc_error = "google-auth is not installed"
+        return
+
     try:
-        query = _owner_scope_filtered_query(FIRESTORE_COLLECTION, owner_scope)
-        list(query.limit(1).stream())
+        credentials, detected_project = _google_auth_mod.default()
+        _adc_credentials_present = credentials is not None
+        _adc_project_id = detected_project
+        if credentials is not None:
+            _adc_credential_type = credentials.__class__.__name__
+            _adc_service_account_email = getattr(credentials, "service_account_email", None)
     except Exception as exc:
-        raise PersistenceUnavailableError(
-            f"Durable memory query failed for scope {owner_scope}: {exc}"
-        ) from exc
+        _adc_error = str(exc)
+
+
+def _resolve_firestore_project() -> Tuple[Optional[str], str]:
+    """Choose the Firestore project explicitly and report where it came from."""
+    candidates = [
+        ("OAKWELL_FIRESTORE_PROJECT", os.environ.get("OAKWELL_FIRESTORE_PROJECT")),
+        ("FIRESTORE_PROJECT", os.environ.get("FIRESTORE_PROJECT")),
+        ("GOOGLE_CLOUD_PROJECT", os.environ.get("GOOGLE_CLOUD_PROJECT")),
+        ("GCLOUD_PROJECT", os.environ.get("GCLOUD_PROJECT")),
+    ]
+    for source, value in candidates:
+        cleaned = (value or "").strip()
+        if cleaned:
+            return cleaned, source
+
+    adc_project = (_adc_project_id or "").strip()
+    if adc_project:
+        return adc_project, "google.auth.default()"
+
+    return None, "unconfigured"
+
+
+def _storage_readiness_snapshot(owner_scope: Optional[str] = None, run_scope_probe: bool = False) -> Dict[str, Any]:
+    """Return a detailed storage readiness payload for health checks and onboarding."""
+    persistence = _persistence_status()
+    scope_probe_ok = _firestore_last_scope_probe_ok
+    scope_probe_error = _firestore_last_scope_probe_error
+
+    if run_scope_probe and owner_scope and not ALLOW_EPHEMERAL_MEMORY_FALLBACK:
+        try:
+            _run_scope_probe(owner_scope)
+            scope_probe_ok = True
+            scope_probe_error = None
+        except PersistenceUnavailableError as exc:
+            scope_probe_ok = False
+            scope_probe_error = str(exc)
+
+    return {
+        "owner_scope": owner_scope,
+        "storage_mode": persistence["persistence_backend"],
+        "persistence_backend": persistence["persistence_backend"],
+        "persistence_ready": persistence["durable_memory_ready"],
+        "persistence_reason": persistence["persistence_reason"] or None,
+        "firestore_project": FIRESTORE_PROJECT,
+        "firestore_project_source": _firestore_project_source,
+        "firestore_collection": FIRESTORE_COLLECTION,
+        "firestore_available": _firestore_db is not None,
+        "firestore_init_error": _firestore_init_error,
+        "firestore_status_reason": _firestore_status_reason or None,
+        "firestore_boot_ping_ok": _firestore_boot_ping_ok,
+        "firestore_boot_ping_error": _firestore_boot_ping_error,
+        "firestore_scope_probe_scope": owner_scope or _firestore_last_scope_probe_scope,
+        "firestore_scope_probe_ok": scope_probe_ok,
+        "firestore_scope_probe_error": scope_probe_error,
+        "adc_credentials_present": _adc_credentials_present,
+        "adc_project_id": _adc_project_id,
+        "adc_credential_type": _adc_credential_type,
+        "adc_service_account_email": _adc_service_account_email,
+        "adc_error": _adc_error,
+        "ephemeral_fallback_enabled": ALLOW_EPHEMERAL_MEMORY_FALLBACK,
+    }
 
 # ---------------------------------------------------------------------------
 # Firestore client
 # ---------------------------------------------------------------------------
 
-FIRESTORE_PROJECT = (
-    os.environ.get("OAKWELL_FIRESTORE_PROJECT")
-    or os.environ.get("FIRESTORE_PROJECT")
-    or os.environ.get("GOOGLE_CLOUD_PROJECT")
-    or os.environ.get("GCLOUD_PROJECT")
-    or "gen-lang-client-0830900967"
-)
+_detect_adc_state()
+FIRESTORE_PROJECT, _firestore_project_source = _resolve_firestore_project()
 FIRESTORE_COLLECTION = "oakwell_deals"
 FIRESTORE_RUNS_COLLECTION = "oakwell_analysis_runs"
 
@@ -127,32 +244,53 @@ _firestore_db: Optional[Any] = None  # google.cloud.firestore.Client or None
 _firestore_init_error: Optional[str] = None
 _firestore_status_reason: str = "ok"
 
-if _firestore_mod is not None:
+if _firestore_mod is not None and FIRESTORE_PROJECT:
     try:
         _firestore_db = _firestore_mod.Client(project=FIRESTORE_PROJECT)
         # Quick reachability check — list first doc (limit 1)
         _ping = list(_firestore_db.collection(FIRESTORE_COLLECTION).limit(1).stream())
+        _firestore_boot_ping_ok = True
         logger.info(
-            "Firestore client initialised — project '%s', collection '%s' (ping OK, %d docs)",
-            FIRESTORE_PROJECT, FIRESTORE_COLLECTION, len(_ping),
+            "Firestore client initialised — project='%s' source=%s collection='%s' ping_ok=%s docs=%d adc_project=%s credential=%s service_account=%s",
+            FIRESTORE_PROJECT,
+            _firestore_project_source,
+            FIRESTORE_COLLECTION,
+            _firestore_boot_ping_ok,
+            len(_ping),
+            _adc_project_id,
+            _adc_credential_type,
+            _adc_service_account_email,
         )
     except Exception as _fs_err:
         _firestore_init_error = str(_fs_err)
         _firestore_status_reason = f"Firestore init/ping failed: {_fs_err}"
-        logger.warning("Firestore init/ping failed — falling back to memory.json: %s", _fs_err)
+        _firestore_boot_ping_error = str(_fs_err)
+        logger.warning(
+            "Firestore init/ping failed — project='%s' source=%s adc_project=%s credential=%s service_account=%s error=%s",
+            FIRESTORE_PROJECT,
+            _firestore_project_source,
+            _adc_project_id,
+            _adc_credential_type,
+            _adc_service_account_email,
+            _fs_err,
+        )
         _firestore_db = None
+elif _firestore_mod is not None:
+    _firestore_init_error = "Firestore project is not configured"
+    _firestore_status_reason = (
+        "Firestore project is not configured. Set OAKWELL_FIRESTORE_PROJECT explicitly in production "
+        "or provide ADC with a valid project."
+    )
+    logger.warning(
+        "Firestore disabled — no project resolved. source=%s adc_project=%s adc_error=%s",
+        _firestore_project_source,
+        _adc_project_id,
+        _adc_error,
+    )
 else:
     _firestore_init_error = "google-cloud-firestore is not installed"
     _firestore_status_reason = "google-cloud-firestore is not installed."
-    logger.warning(
-        "google-cloud-firestore not installed — falling back to local memory.json"
-    )
-        _firestore_status_reason = f"Firestore init/ping failed: {_fs_err}"
-        logger.warning("%s", _firestore_status_reason)
-        _firestore_db = None
-else:
-    _firestore_status_reason = "google-cloud-firestore is not installed."
-    logger.warning("%s", _firestore_status_reason)
+    logger.warning("google-cloud-firestore not installed")
 
 if tools.resolve_genai_api_key():
     logger.info("Gemini API key detected in backend environment")
@@ -2706,27 +2844,32 @@ async def get_proof(filename: str, auth_ctx: AuthContext = Depends(_require_auth
 
 @app.get("/health")
 async def health() -> Dict[str, Any]:
-    persistence = _persistence_status()
+    snapshot = _storage_readiness_snapshot()
     return {
         "status": "ok",
-        "persistence_ready": persistence["durable_memory_ready"],
-        "persistence_backend": persistence["persistence_backend"],
-        "persistence_reason": persistence["persistence_reason"] or None,
+        "persistence_ready": snapshot["persistence_ready"],
+        "persistence_backend": snapshot["persistence_backend"],
+        "persistence_reason": snapshot["persistence_reason"],
+        "firestore_project": snapshot["firestore_project"],
+        "firestore_project_source": snapshot["firestore_project_source"],
+        "firestore_available": snapshot["firestore_available"],
+        "firestore_boot_ping_ok": snapshot["firestore_boot_ping_ok"],
+        "firestore_boot_ping_error": snapshot["firestore_boot_ping_error"],
+        "firestore_scope_probe_scope": snapshot["firestore_scope_probe_scope"],
+        "firestore_scope_probe_ok": snapshot["firestore_scope_probe_ok"],
+        "firestore_scope_probe_error": snapshot["firestore_scope_probe_error"],
+        "adc_credentials_present": snapshot["adc_credentials_present"],
+        "adc_project_id": snapshot["adc_project_id"],
+        "adc_credential_type": snapshot["adc_credential_type"],
+        "adc_service_account_email": snapshot["adc_service_account_email"],
+        "adc_error": snapshot["adc_error"],
     }
 
 
 @app.get("/storage-status")
 async def storage_status(auth_ctx: AuthContext = Depends(_require_auth_context)) -> Dict[str, Any]:
     """Return backend storage diagnostics for onboarding and support triage."""
-    return {
-        "owner_scope": auth_ctx.scope_id,
-        "storage_mode": "firestore" if _firestore_db is not None else "local_fallback",
-        "firestore_project": FIRESTORE_PROJECT,
-        "firestore_collection": FIRESTORE_COLLECTION,
-        "firestore_available": _firestore_db is not None,
-        "firestore_init_error": _firestore_init_error,
-        "firestore_status_reason": _firestore_status_reason,
-    }
+    return _storage_readiness_snapshot(auth_ctx.scope_id, run_scope_probe=True)
 
 
 @app.get("/sentinel-status")
@@ -2746,18 +2889,36 @@ async def sentinel_status(auth_ctx: AuthContext = Depends(_require_auth_context)
 
 @app.get("/memory")
 async def get_memory(auth_ctx: AuthContext = Depends(_require_auth_context)) -> Dict[str, Any]:
-    """Return the entire memory bank for UI insights."""
+    """Return the entire memory bank for UI insights.
+
+    Gracefully degrades: returns empty data with a _persistence_degraded
+    metadata key when Firestore is unavailable, rather than a hard 503.
+    This lets the dashboard render in degraded mode instead of blocking
+    the user entirely.  Write-path endpoints (/analyze-deal) still enforce
+    the 503 since persisting results there is critical.
+    """
+    persistence = _persistence_status()
+    logger.info(
+        "Memory request for scope=%s via backend=%s durable=%s",
+        auth_ctx.scope_id,
+        persistence["persistence_backend"],
+        persistence["durable_memory_ready"],
+    )
     try:
-        persistence = _persistence_status()
-        logger.info(
-            "Memory request for scope=%s via backend=%s durable=%s",
-            auth_ctx.scope_id,
-            persistence["persistence_backend"],
-            persistence["durable_memory_ready"],
-        )
-        return _load_memory(auth_ctx.scope_id)
+        memory = _load_memory(auth_ctx.scope_id)
+        memory["_persistence_degraded"] = False
+        memory["_persistence_reason"] = None
+        return memory
     except PersistenceUnavailableError as exc:
-        raise _http_503_from_persistence(exc) from exc
+        logger.warning(
+            "Memory read degraded for scope=%s: %s — returning empty bank",
+            auth_ctx.scope_id,
+            exc,
+        )
+        return {
+            "_persistence_degraded": True,
+            "_persistence_reason": str(exc),
+        }
 
 
 @app.get("/analysis-runs")
@@ -2857,7 +3018,11 @@ async def get_workspace(auth_ctx: AuthContext = Depends(_require_auth_context)) 
         workspace = _load_workspace(auth_ctx.scope_id)
     except PersistenceUnavailableError:
         workspace = None
-    return {"configured": workspace is not None, "workspace": workspace}
+    return {
+        "configured": workspace is not None,
+        "workspace": workspace,
+        "storage_ready": _storage_readiness_snapshot(auth_ctx.scope_id).get("persistence_ready", False),
+    }
 
 
 @app.get("/workspace-setup")
@@ -2867,7 +3032,12 @@ async def workspace_setup_status(auth_ctx: AuthContext = Depends(_require_auth_c
         workspace = _load_workspace(auth_ctx.scope_id)
     except PersistenceUnavailableError:
         workspace = None
-    return {"configured": workspace is not None}
+    snapshot = _storage_readiness_snapshot(auth_ctx.scope_id, run_scope_probe=True)
+    return {
+        "configured": workspace is not None,
+        "storage_ready": snapshot["persistence_ready"],
+        "storage_reason": snapshot["persistence_reason"],
+    }
 
 
 @app.post("/workspace")

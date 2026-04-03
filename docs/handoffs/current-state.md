@@ -29,18 +29,24 @@ The platform uses multi-agent AI to cross-reference sales transcripts with live 
 - **Persistence Truth Pass**: Oakwell now treats Firestore as the required durable memory backend for production. `main.py` no longer silently falls back to `outputs/memory.json` unless `OAKWELL_ALLOW_EPHEMERAL_MEMORY_FALLBACK=1`, and the dashboard now surfaces memory failures instead of presenting empty-state resets as if no data existed.
 - **Evidence Ledger + Run History**: Oakwell now persists immutable `analysis_runs` records alongside the competitor memory rollup. Each run stores normalized `evidence_items`, `source_coverage`, timestamps, proof filenames, and analysis metadata so the dashboard can explain why it knows something instead of only showing a score and talk track.
 - **Local Demo Auth Fallback**: The app root now skips `ClerkProvider` when `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is unavailable, and `src/middleware.ts` becomes a no-op when Clerk env vars are missing, so `/demo` can still render during local development.
+- **Deal Desk TypeScript Guardrail**: `website-2/src/components/dashboard-pages/deals-page.tsx` now derives a `completedResult` object only when the job status is `"completed"` and uses that null-safe reference throughout the completed-analysis render path, preventing strict TypeScript nullability failures during production builds.
+- **Dashboard Navigation Hardening**: `website-2/src/components/dashboard-shell.tsx` now hardens sidebar navigation with an explicit client-router push plus same-origin document fallback. This preserves navigation even when the dashboard is already in a degraded memory/error state and App Router soft navigation stalls in preview/production.
 - **Storage Diagnostics + Onboarding Guardrail**: `main.py` now resolves Firestore project from env (`OAKWELL_FIRESTORE_PROJECT` → `FIRESTORE_PROJECT` → `GOOGLE_CLOUD_PROJECT`) and exposes `/storage-status` for runtime diagnostics. Onboarding now checks storage health before running scans and blocks “Enter War Room” when durable memory is offline, with actionable remediation logs instead of a false-success setup flow.
+- **Firestore Production Readiness Pass**: Firestore project selection is now explicit and operator-readable. Oakwell no longer hardcodes a fallback GCP project for Firestore; it resolves the project from env or ADC, reports the project source, boot-ping result, last scoped-read probe, and ADC/service-account diagnostics through `/health` and `/storage-status`, and surfaces “backend online but durable memory unavailable” honestly in War Room and onboarding.
 - **Backend Port Fix**: Modified `start.sh` to run FastAPI on port 8080 (GCP) and Streamlit on 8501 (internal).
 - **Backend Deployment Verification**: Live Cloud Run now responds correctly on `/health` with FastAPI, and `/memory` / `/sentinel-status` are reachable.
 - **UI Polish**: Switched to **Geist Sans/Mono** fonts and refined component borders/spacing.
 - **API Billing (Model A)**: Removed `X-Google-API-Key` requirement; backend now uses server-side env vars.
 - **Git Sync**: All local changes committed and pushed to GitHub (`main`).
+- **Memory Graceful Degradation**: The `/memory` backend endpoint now returns `{}` with `_persistence_degraded: true` metadata when Firestore is unavailable, instead of a hard HTTP 503. The frontend Deal Desk shows an amber degraded-mode warning banner that lets users continue running analyses instead of completely blocking the page. The `/analyze-deal` write path still enforces the 503 gate.
 
 ## In progress
 - Cloud Run + Vercel redeploy needed to activate Workspace Personas in production.
 - Validation of a true end-to-end analysis run that writes usable data into `/memory`.
-- Validating the new loud-failure persistence path in Cloud Run after redeploy so Firestore issues appear as explicit 503s instead of transient “saved for today, gone tomorrow” behavior.
+- Fixing production Firestore readiness on Cloud Run so the active serving revision points at the real project/database instead of an invalid fallback project.
+- The `/memory` read path now degrades gracefully; the `/analyze-deal` write path still needs Firestore or explicit ephemeral fallback to persist results durably.
 - Validating the new `/analysis-runs` path in production so the dashboard can show immutable run history and evidence ledger cards from real Firestore data after reload/day-two return visits.
+- Verifying that the new shell-level navigation fallback behaves cleanly in production after the latest preview/production deploys, especially on memory-error screens.
 - Integration of Server-Sent Events (SSE) for live agent status updates.
 - Auditing the remaining dashboard surfaces (`forecast`, `executive`, `sidekick`) against real backend payloads.
 - Defining the next backend moat beyond wrapper behavior: multi-source evidence retrieval, richer memory, and stronger retrieval/agent strategy for enterprise-grade competitive intelligence.
@@ -55,7 +61,9 @@ The platform uses multi-agent AI to cross-reference sales transcripts with live 
 - **Deployment Validation Pending**: Cloud Run must be redeployed with the latest `main.py` / `tools.py` fast-model patch before the live backend can be trusted as the working-model source of truth.
 - **Post-Fix Redeploy Needed**: Cloud Run must be redeployed with the explicit GenAI API-key resolution patch before production analysis can be trusted; otherwise `/analyze-deal` may still fail with SDK auth-discovery errors even when `GOOGLE_API_KEY` is present in Cloud Run.
 - **Persistence Deploy Needed**: Cloud Run must be redeployed with the new persistence gate. Until then, production may still silently use instance-local JSON fallback and appear to “forget” analyses across days or instance restarts.
+- **Firestore Project / Database Misconfiguration**: Production health has reported `Firestore init/ping failed: 404 The database (default) does not exist for project gen-lang-client-0830900967`, which means the serving Cloud Run revision is still resolving Firestore against the wrong project or against a project with no Firestore database provisioned.
 - **Evidence/Run Deploy Needed**: Cloud Run and Vercel must be redeployed with the immutable run + evidence ledger changes before the dashboard can show source coverage and recent analysis history from live data.
+- **Shell Nav Deploy Needed**: Vercel must pick up the latest `dashboard-shell.tsx` navigation fallback so sidebar links continue to work when the dashboard is already showing a loud memory-health failure.
 - **Security Env Pending**: Production now needs `OAKWELL_BACKEND_URL` and `OAKWELL_INTERNAL_API_SECRET` on the Next side, plus `OAKWELL_INTERNAL_API_SECRET` on the FastAPI side. Until those are configured and deployed together, the new secure proxy path will not work in production.
 - **Clerk Dashboard Policy Pending**: Password hashing/session/reset/email-verification/login-throttling are handled by Clerk, so production security still depends on those controls being explicitly enabled in Clerk settings.
 
@@ -77,6 +85,7 @@ The platform uses multi-agent AI to cross-reference sales transcripts with live 
 - `main.py`: FastAPI backend entrypoint (Model A billing logic).
 - `website-2/src/lib/api.ts`: Frontend API boundary and normalization layer for backend responses.
 - `website-2/src/app/api/backend/[...path]/route.ts`: Authenticated server-side proxy from Next.js to FastAPI.
+- `website-2/src/components/dashboard-shell.tsx`: Shared dashboard shell and sidebar navigation hardening.
 - `website-2/next.config.ts`: Security headers for the public-facing Next.js app.
 - `docs/security/public-launch-checklist.md`: Operational checklist for making the repo/app public safely.
 
@@ -89,6 +98,7 @@ The platform uses multi-agent AI to cross-reference sales transcripts with live 
 - **Data Hooks**: All frontend hooks (`useQuery`, `useMemory`, etc.) in `hooks.ts` dynamically bypass the API fetch if `isDemo` is true (passing `demoData` instead).
 - **Production API Status**: Live Cloud Run is healthy at `/health`, but production data is currently empty (`/memory` returns `{}` and `/sentinel-status` shows zero watched URLs).
 - **Persistence Health Contract**: `/health` now exposes `persistence_ready`, `persistence_backend`, and `persistence_reason` so production can distinguish “healthy API” from “durable memory actually available.”
+- **Storage Diagnostics Contract**: `/storage-status` and `/health` now expose `firestore_project`, `firestore_project_source`, `firestore_boot_ping_ok/error`, `firestore_scope_probe_ok/error`, and ADC/service-account metadata. Use these before trusting onboarding completion or dashboard memory states.
 - **Normalization Requirement**: Frontend consumers should not assume backend fields are plain strings; normalize at the API seam before rendering.
 - **Analysis Routing**: `main.py` now distinguishes between `proof_verification` and `strategy_only` modes. The frontend should use `analysis_mode`, `evidence_status`, `evidence_summary`, `verification_reason`, `claim_count`, and `verified_claim_count` from `website-2/src/lib/api.ts` rather than inferring proof state from score alone.
 - **Auth Model**: Clerk protects `/dashboard` in Next.js, but the browser no longer talks to FastAPI directly. Next route handlers now proxy authenticated requests to FastAPI with `X-Oakwell-Internal-Secret`, `X-Oakwell-User-Id`, and optional `X-Oakwell-Org-Id`.
