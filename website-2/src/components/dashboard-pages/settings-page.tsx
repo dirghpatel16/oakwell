@@ -10,17 +10,28 @@ import {
   ExternalLink,
   ChevronRight,
   Check,
+  Database,
+  Calendar,
 } from "lucide-react";
 import { useWorkspace } from "@/lib/hooks";
+import { useDashboardSurface } from "@/components/dashboard-shell";
 import * as api from "@/lib/api";
+import { DEMO_INTEGRATIONS } from "@/lib/demo-data";
+import { LiveBadge, StatusChip } from "@/components/ui/live-indicators";
+import { WorkflowBar } from "@/components/ui/demo-terminal-primitives";
 
 export default function SettingsPage() {
   const { data: workspaceData, refresh: refreshWorkspace } = useWorkspace();
+  const { isDemoSurface } = useDashboardSurface();
   const [companyName, setCompanyName] = useState("");
   const [valueProp, setValueProp] = useState("");
   const [userRole, setUserRole] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const integrationSummary = (isDemoSurface ? DEMO_INTEGRATIONS : []).reduce((acc, integration) => {
+    acc[integration.status] = (acc[integration.status] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
 
   useEffect(() => {
     if (workspaceData?.workspace) {
@@ -51,9 +62,39 @@ export default function SettingsPage() {
   return (
     <div className="p-6 md:p-8 max-w-[900px] mx-auto space-y-8">
       <div className="border-b border-zinc-800 pb-6">
-        <h1 className="text-2xl font-semibold text-white tracking-tight">Settings</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-semibold text-white tracking-tight">Settings</h1>
+          {isDemoSurface ? <LiveBadge label="SYNC" color="green" /> : null}
+          {isDemoSurface ? <StatusChip label="DEMO SAFE" variant="wire" /> : null}
+        </div>
         <p className="text-sm text-zinc-500 mt-1">Manage your workspace, integrations, and agent configuration</p>
       </div>
+
+      {isDemoSurface ? (
+        <div className="rounded-2xl border border-zinc-800 bg-[#0a0a0a] p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200">Integration Health</h2>
+              <p className="mt-1 text-[11px] text-zinc-500">Connected systems feel live because they have states, recency, and follow-up actions.</p>
+            </div>
+            <div className="flex flex-wrap gap-2 text-[11px]">
+              <span className="rounded-full border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-zinc-300">Connected {integrationSummary.connected || 0}</span>
+              <span className="rounded-full border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-zinc-300">Pending {integrationSummary.pending || 0}</span>
+              <span className="rounded-full border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-zinc-300">Reconnect {integrationSummary.reconnect || 0}</span>
+            </div>
+          </div>
+          <div className="mt-4">
+            <WorkflowBar
+              actions={[
+                { label: "Test Slack alert", tone: "live" },
+                { label: "Reconnect Gong", tone: "alert" },
+                { label: "Save view", tone: "info" },
+                { label: "Export integration brief", tone: "low" },
+              ]}
+            />
+          </div>
+        </div>
+      ) : null}
 
       <SettingsSection icon={<User className="w-4 h-4" />} title="Profile" description="Your personal account settings">
         <div className="space-y-4">
@@ -110,11 +151,22 @@ export default function SettingsPage() {
 
       <SettingsSection icon={<Webhook className="w-4 h-4" />} title="Integrations" description="Connect your CRM, call recorder, and notification channels">
         <div className="space-y-3">
-          <IntegrationRow name="HubSpot CRM" description="Sync deals, contacts, and pipeline data" connected={false} />
-          <IntegrationRow name="Salesforce" description="Import opportunities and account intelligence" connected={false} />
-          <IntegrationRow name="Gong / Chorus" description="Auto-import call transcripts for analysis" connected={false} />
-          <IntegrationRow name="Slack" description="Receive real-time alerts and Sentinel notifications" connected={false} />
-          <IntegrationRow name="Google Meet / Zoom" description="Live meeting sidekick and transcript capture" connected={false} />
+          {(isDemoSurface ? DEMO_INTEGRATIONS : [
+            { name: "HubSpot CRM", category: "CRM", status: "pending", detail: "Sync deals, contacts, and pipeline data", sync: "not connected" },
+            { name: "Salesforce", category: "CRM", status: "pending", detail: "Import opportunities and account intelligence", sync: "not connected" },
+            { name: "Gong / Chorus", category: "Conversation", status: "pending", detail: "Auto-import call transcripts for analysis", sync: "not connected" },
+            { name: "Slack", category: "Comms", status: "pending", detail: "Receive real-time alerts and Sentinel notifications", sync: "not connected" },
+            { name: "Google Meet / Zoom", category: "Calendar", status: "pending", detail: "Live meeting sidekick and transcript capture", sync: "not connected" },
+          ]).map((integration) => (
+            <IntegrationRow
+              key={integration.name}
+              name={integration.name}
+              category={integration.category}
+              description={integration.detail}
+              status={integration.status}
+              sync={integration.sync}
+            />
+          ))}
         </div>
       </SettingsSection>
 
@@ -160,6 +212,16 @@ export default function SettingsPage() {
           </div>
         </div>
       </SettingsSection>
+
+      {isDemoSurface ? (
+        <SettingsSection icon={<Database className="w-4 h-4" />} title="Knowledge Sources" description="Control the evidence systems that power Oakwell's competitive memory">
+          <div className="space-y-3">
+            <KnowledgeRow icon={<Building2 className="w-3.5 h-3.5" />} label="Website intelligence" detail="162 pages indexed across pricing, product, docs, and trust center surfaces" status="Healthy" />
+            <KnowledgeRow icon={<Calendar className="w-3.5 h-3.5" />} label="Changelog / release capture" detail="7 competitor launch notes normalized into memory this week" status="Fresh" />
+            <KnowledgeRow icon={<Bell className="w-3.5 h-3.5" />} label="Community & review monitoring" detail="G2, Reddit, and community forum deltas reranked every 12 hours" status="Live" />
+          </div>
+        </SettingsSection>
+      ) : null}
 
       <SettingsSection icon={<Bell className="w-4 h-4" />} title="Notifications" description="Control when and how you receive alerts">
         <div className="space-y-3">
@@ -215,22 +277,31 @@ function SettingsRow({ label, value, badge }: { label: string; value: string; ba
   );
 }
 
-function IntegrationRow({ name, description, connected }: { name: string; description: string; connected: boolean }) {
+function IntegrationRow({ name, category, description, status, sync }: { name: string; category: string; description: string; status: string; sync: string }) {
+  const badge =
+    status === "connected"
+      ? "bg-green-500/10 text-green-400 border-green-500/20"
+      : status === "reconnect"
+        ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+        : status === "standby"
+          ? "bg-blue-500/10 text-blue-400 border-blue-500/20"
+          : "bg-zinc-800 text-zinc-400 border-zinc-700";
   return (
     <div className="flex items-center justify-between py-2 group">
       <div>
         <p className="text-sm text-zinc-300 font-medium">{name}</p>
-        <p className="text-[10px] text-zinc-500">{description}</p>
+        <p className="text-[10px] text-zinc-500">{category} • {description}</p>
+        <p className="text-[10px] text-zinc-600 font-mono mt-1">Last sync: {sync}</p>
       </div>
-      {connected ? (
-        <span className="text-[10px] font-medium bg-green-500/10 text-green-400 px-2.5 py-1 rounded border border-green-500/20 flex items-center gap-1">
-          <Check className="w-3 h-3" /> Connected
+      <div className="flex items-center gap-2">
+        <span className={`text-[10px] font-medium px-2.5 py-1 rounded border flex items-center gap-1 ${badge}`}>
+          {status === "connected" ? <Check className="w-3 h-3" /> : null}
+          {status}
         </span>
-      ) : (
         <button className="text-xs bg-zinc-900 border border-zinc-800 px-3 py-1.5 rounded text-zinc-400 hover:text-white hover:border-zinc-700 transition-colors flex items-center gap-1">
-          Connect <ChevronRight className="w-3 h-3" />
+          {status === "connected" ? "Manage" : status === "reconnect" ? "Reconnect" : "Connect"} <ChevronRight className="w-3 h-3" />
         </button>
-      )}
+      </div>
     </div>
   );
 }
@@ -259,6 +330,23 @@ function SlackChannelRow({ channel, alertType, enabled }: { channel: string; ale
       <div className={`w-8 h-4 rounded-full relative cursor-pointer transition-colors ${enabled ? "bg-green-600" : "bg-zinc-700"}`}>
         <div className={`w-3 h-3 rounded-full bg-white absolute top-0.5 transition-transform ${enabled ? "translate-x-4" : "translate-x-0.5"}`} />
       </div>
+    </div>
+  );
+}
+
+function KnowledgeRow({ icon, label, detail, status }: { icon: React.ReactNode; label: string; detail: string; status: string }) {
+  return (
+    <div className="flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 text-zinc-500">{icon}</div>
+        <div>
+          <p className="text-sm text-zinc-300">{label}</p>
+          <p className="mt-1 text-[10px] text-zinc-500">{detail}</p>
+        </div>
+      </div>
+      <span className="rounded-full border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-[10px] font-medium text-zinc-300">
+        {status}
+      </span>
     </div>
   );
 }

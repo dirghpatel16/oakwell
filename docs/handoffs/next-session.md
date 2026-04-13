@@ -11,37 +11,45 @@
 - `main.py` and `tools.py` (To confirm the active fast-model path)
 
 ## Immediate task
-1. Configure the Clerk-side security controls from `docs/security/public-launch-checklist.md`:
+1. Walk the refreshed `/demo` flow in-browser and tighten product polish for founder recording:
+   - verify the new War Room exposure map behavior on desktop and mobile
+   - verify Market Sentinel's new relationship map and Threat Intel / Sentinel mobile detail sections on common viewport sizes
+   - tighten any overflow / density issues that feel unrecordable in a 3-minute pitch
+2. Finish the remaining in-route demo state wiring where navigation is still only page-level:
+   - Forecast cards should open preselected competitor/detail context instead of generic route changes
+   - Executive and Sidekick routes should preserve source competitor context where useful
+   - Deal Desk left rail could use saved-view pills and explicit deal-stage filters now that direct deep-link selection exists
+3. Configure the Clerk-side security controls from `docs/security/public-launch-checklist.md`:
    - mandatory email verification
    - session lifetime / inactivity expiry
    - password reset expiry
    - login throttling / bot protection
-2. Deploy the new secure request path end-to-end:
+4. Deploy the new secure request path end-to-end:
    - Vercel: `OAKWELL_BACKEND_URL`, `OAKWELL_INTERNAL_API_SECRET`, Clerk envs
    - Cloud Run: `OAKWELL_INTERNAL_API_SECRET`, `GOOGLE_API_KEY`, `OAKWELL_FIRESTORE_PROJECT` (or `FIRESTORE_PROJECT` / `GOOGLE_CLOUD_PROJECT`), Clerk-related app envs as needed
-3. Redeploy Cloud Run with the latest `main.py` / `tools.py` fast-model update (`gemini-2.5-flash` default via `OAKWELL_FAST_MODEL`) so the live analysis path no longer depends on deprecated `gemini-2.0-flash`.
-4. Confirm the explicit GenAI auth patch is live in Cloud Run:
+5. Redeploy Cloud Run with the latest `main.py` / `tools.py` fast-model update (`gemini-2.5-flash` default via `OAKWELL_FAST_MODEL`) so the live analysis path no longer depends on deprecated `gemini-2.0-flash`.
+6. Confirm the explicit GenAI auth patch is live in Cloud Run:
    - `tools.py` now resolves `GOOGLE_API_KEY` / `GEMINI_API_KEY` explicitly instead of relying on SDK auto-discovery
    - `/analyze-deal` should now fail fast with a clean 503 if backend AI credentials are missing
-5. Redeploy Cloud Run with the new durable-memory gate:
+7. Redeploy Cloud Run with the new durable-memory gate:
    - keep Firestore healthy
    - set `OAKWELL_ALLOW_EPHEMERAL_MEMORY_FALLBACK=0` in production
    - confirm `/health` reports `persistence_ready: true`
    - confirm `/health` reports the correct `firestore_project` and `firestore_project_source`
    - confirm `/storage-status` reports `firestore_boot_ping_ok: true` and `firestore_scope_probe_ok: true`
-6. Run two real production analyses so `/memory` is populated and the updated `/dashboard` flow can be validated end-to-end:
+8. Run two real production analyses so `/memory` is populated and the updated `/dashboard` flow can be validated end-to-end:
    - one proof-backed transcript with concrete public claims
    - one qualitative transcript that should route to `strategy_only`
-7. Validate the new trust surfaces in production:
+9. Validate the new trust surfaces in production:
    - `/analysis-runs?url=...` returns immutable run history
    - Deal Desk shows `source_coverage` and `evidence_items` after reload
    - previous analyses still appear the next day after Cloud Run instance churn
-8. Validate the latest shell navigation hardening in production:
+10. Validate the latest shell navigation hardening in production:
    - sidebar links should still route normally even when `/dashboard/deals` is showing `Memory bank unavailable`
    - confirm preview and production both leave the current page correctly and do not strand the user on Deal Desk
-9. Audit the remaining `/dashboard` screens (`forecast`, `executive`, `sidekick`) against real backend payloads.
-10. Once the data path is verified, wire up `websocket-context.tsx` to handle true Server-Sent Events (SSE) or backend event flow instead of simulated operation progress.
-11. Start an architecture pass on the durable backend moat: multi-page evidence retrieval, stronger competitive memory/RAG, and agent orchestration that is materially more defensible than a thin wrapper over frontier chat models.
+11. Audit the remaining `/dashboard` screens (`forecast`, `executive`, `sidekick`) against real backend payloads.
+12. Once the data path is verified, wire up `websocket-context.tsx` to handle true Server-Sent Events (SSE) or backend event flow instead of simulated operation progress.
+13. Start an architecture pass on the durable backend moat: multi-page evidence retrieval, stronger competitive memory/RAG, and agent orchestration that is materially more defensible than a thin wrapper over frontier chat models.
 
 ## Watch out for
 - **Route Prefixing**: Links in the sidebar/shell must use the `basePath` prop from `DashboardShell` to avoid crossing between `/dashboard` and `/demo`.
@@ -60,6 +68,7 @@
 - **Security Automation**: `.github/workflows/security.yml` and `.github/dependabot.yml` now exist. Keep them green and extend them instead of replacing them with ad hoc manual checks.
 - **Env Templates**: `.env.example` and `website-2/.env.example` are now the safe templates for required secrets. Do not document real values in code or docs.
 - **Clerk Auth**: Ensure `/demo` routes remain public in `middleware.ts` if adding more sub-pages.
+- **Demo Density Risk**: The new demo surfaces are intentionally denser; watch for horizontal overflow and right-drawer collisions on smaller laptops/tablets before recording founder demos.
 - **Local Auth Fallback**: `src/app/layout.tsx` still bypasses `ClerkProvider` when the publishable key is missing so `/demo` can render locally, but `src/middleware.ts` now blocks `/dashboard` when Clerk is not configured.
 - **Preview Deploy Build Drift**: If Vercel still reports the older `activeDeal is possibly null/undefined` TypeScript error, confirm the preview deployment is on the commit that includes the `completedResult` null-safe Deal Desk update and redeploy that commit.
 - **API Models**: We are absorbing costs (Model A), so never re-introduce `X-Google-API-Key` headers in the frontend.

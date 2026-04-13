@@ -87,7 +87,7 @@ export function ConnectionStatus() {
         {connected ? "LIVE" : connectionStatus.toUpperCase()}
       </div>
       <span className="text-zinc-600">|</span>
-      <span className="text-zinc-400">{`SYNC: ${syncLabel}`}</span>
+      <span className="text-zinc-400" suppressHydrationWarning>{`SYNC: ${syncLabel}`}</span>
     </div>
   );
 }

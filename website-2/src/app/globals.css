@@ -60,6 +60,15 @@ body {
   animation: marquee 40s linear infinite;
 }
 
+/* Signal ticker — faster, Bloomberg-style */
+@keyframes ticker {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.animate-ticker {
+  animation: ticker 60s linear infinite;
+}
+
 /* Shimmer animation for progress bars */
 @keyframes shimmer {
   0% { background-position: -200% 0; }
