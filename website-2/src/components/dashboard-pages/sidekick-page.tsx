@@ -13,18 +13,26 @@ import {
   CheckCircle2,
   Send,
   Loader2,
+  Radio,
+  ArrowRight,
 } from "lucide-react";
 import { useLiveSidekick } from "@/lib/hooks";
 import type { LiveSnippetResponse } from "@/lib/api";
+import { useDashboardSurface } from "@/components/dashboard-shell";
+import { DEMO_COMPETITOR_PROFILES, DEMO_SIDEKICK_QUEUE, DEMO_SIDEKICK_QUICK_SNIPPETS } from "@/lib/demo-data";
+import { StatusChip } from "@/components/ui/live-indicators";
+import { WorkflowBar } from "@/components/ui/demo-terminal-primitives";
 
 export default function LiveSidekickPage() {
   const { send, history, loading, error } = useLiveSidekick();
+  const { isDemoSurface } = useDashboardSurface();
   const [isLive, setIsLive] = useState(false);
   const [snippet, setSnippet] = useState("");
   const [competitorUrl, setCompetitorUrl] = useState("");
   const [callDuration, setCallDuration] = useState(0);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const liveCompetitor = DEMO_COMPETITOR_PROFILES.find((profile) => competitorUrl && profile.domain.includes(competitorUrl.replace(/^https?:\/\//, ""))) || DEMO_COMPETITOR_PROFILES[0];
 
   useEffect(() => {
     if (!isLive) return;
@@ -112,24 +120,56 @@ export default function LiveSidekickPage() {
             />
           </div>
         )}
+
+        {isLive && isDemoSurface ? (
+          <div className="mt-3 grid gap-2 md:grid-cols-4">
+            <SignalStat label="Urgency" value="8.7 / 10" tone="critical" />
+            <SignalStat label="Detected competitor" value={liveCompetitor.name} tone="info" />
+            <SignalStat label="Escalation" value="Exec assist" tone="alert" />
+            <SignalStat label="Evidence confidence" value="92%" tone="live" />
+          </div>
+        ) : null}
       </div>
 
       <div className="flex-1 overflow-y-auto">
         {!isLive ? (
-          <div className="flex flex-col items-center justify-center h-full text-center px-8 space-y-4">
-            <div className="w-16 h-16 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center">
-              <Zap className="w-7 h-7 text-zinc-600" />
+          <div className="grid h-full gap-6 px-6 py-8 lg:grid-cols-[1.1fr_0.9fr]">
+            <div className="flex flex-col justify-center space-y-4">
+              <div className="w-16 h-16 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center">
+                <Zap className="w-7 h-7 text-zinc-600" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-zinc-300">Ready for live competitive coaching</h2>
+                <p className="mt-2 text-sm text-zinc-500 max-w-lg">
+                  Start a session to activate Oakwell&apos;s in-call intelligence loop. The Sidekick detects competitor mentions,
+                  scores urgency, and recommends the next response before the rep loses control of the narrative.
+                </p>
+              </div>
+              <div className="space-y-2 w-full max-w-md">
+                <FeatureRow icon={<ShieldAlert className="w-3.5 h-3.5" />} text="Competitor detection & verification" />
+                <FeatureRow icon={<MessageSquare className="w-3.5 h-3.5" />} text="Pricing claim analysis" />
+                <FeatureRow icon={<AlertTriangle className="w-3.5 h-3.5" />} text="Urgency scoring (low → critical)" />
+                <FeatureRow icon={<CheckCircle2 className="w-3.5 h-3.5" />} text="Real-time actionable coaching" />
+              </div>
             </div>
-            <h2 className="text-lg font-semibold text-zinc-400">Ready for Battle</h2>
-            <p className="text-sm text-zinc-600 max-w-sm">
-              Start a session to activate real-time AI coaching. Paste conversation snippets and
-              Oakwell will analyze claims, detect competitors, and give you live ammunition.
-            </p>
-            <div className="space-y-2 w-full max-w-xs">
-              <FeatureRow icon={<ShieldAlert className="w-3.5 h-3.5" />} text="Competitor detection & verification" />
-              <FeatureRow icon={<MessageSquare className="w-3.5 h-3.5" />} text="Pricing claim analysis" />
-              <FeatureRow icon={<AlertTriangle className="w-3.5 h-3.5" />} text="Urgency scoring (low → critical)" />
-              <FeatureRow icon={<CheckCircle2 className="w-3.5 h-3.5" />} text="Real-time actionable coaching" />
+            <div className="rounded-2xl border border-zinc-800 bg-[#0a0a0a] p-5">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold uppercase tracking-wider text-zinc-200">Live queue preview</h3>
+                <span className="text-[10px] font-mono text-zinc-500">Demo scenario</span>
+              </div>
+              <div className="mt-4 space-y-3">
+                {(isDemoSurface ? DEMO_SIDEKICK_QUEUE : []).map((entry) => (
+                  <div key={`${entry.time}-${entry.text}`} className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className={`text-[10px] uppercase tracking-[0.18em] ${entry.speaker === "Oakwell" ? "text-blue-400" : "text-zinc-500"}`}>
+                        {entry.speaker}
+                      </span>
+                      <span className="text-[10px] font-mono text-zinc-600">{entry.time}</span>
+                    </div>
+                    <p className="mt-2 text-sm leading-relaxed text-zinc-300">{entry.text}</p>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         ) : (
@@ -138,7 +178,36 @@ export default function LiveSidekickPage() {
               <p className="text-[10px] uppercase tracking-wider font-semibold text-zinc-400">
                 AI Coaching ({history.length} responses)
               </p>
+              {isDemoSurface ? <StatusChip label="LIVE COACHING" variant="live" /> : null}
             </div>
+
+            {isDemoSurface ? (
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">Detected mentions</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {liveCompetitor.reviewThemes.slice(0, 3).map((theme) => (
+                        <span key={theme} className="rounded-full border border-zinc-800 bg-[#0a0a0a] px-2 py-1 text-[10px] text-zinc-300">{theme}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">Next-best response</p>
+                    <p className="mt-2 text-xs leading-relaxed text-zinc-300">{liveCompetitor.recommendedAction}</p>
+                  </div>
+                </div>
+                <div className="mt-4">
+                  <WorkflowBar
+                    actions={[
+                      { label: "Open competitor profile", href: `${isDemoSurface ? "/demo" : "/dashboard"}/targets`, tone: "info" },
+                      { label: "Open evidence", href: `${isDemoSurface ? "/demo" : "/dashboard"}/alerts`, tone: "alert" },
+                      { label: "Mark for exec review", href: `${isDemoSurface ? "/demo" : "/dashboard"}/executive`, tone: "critical" },
+                    ]}
+                  />
+                </div>
+              </div>
+            ) : null}
 
             {error && (
               <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-3 py-2">
@@ -163,9 +232,31 @@ export default function LiveSidekickPage() {
             ))}
 
             {history.length === 0 && !loading && (
-              <div className="text-center py-12 text-zinc-600">
-                <MessageSquare className="w-8 h-8 mx-auto mb-2 opacity-40" />
-                <p className="text-xs">Paste a conversation snippet below to get AI coaching</p>
+              <div className="space-y-4 py-6">
+                <div className="text-center text-zinc-600">
+                  <MessageSquare className="w-8 h-8 mx-auto mb-2 opacity-40" />
+                  <p className="text-xs">Paste a conversation snippet below to get AI coaching</p>
+                </div>
+                {isDemoSurface ? (
+                  <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4">
+                    <div className="flex items-center gap-2">
+                      <Radio className="h-4 w-4 text-red-400" />
+                      <p className="text-xs font-semibold uppercase tracking-wider text-zinc-300">Playable prompts</p>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {DEMO_SIDEKICK_QUICK_SNIPPETS.map((prompt) => (
+                        <button
+                          key={prompt}
+                          onClick={() => setSnippet(prompt)}
+                          className="flex w-full items-start justify-between gap-3 rounded-xl border border-zinc-800 bg-[#0a0a0a] px-3 py-3 text-left text-xs text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-900/70"
+                        >
+                          <span className="leading-relaxed">{prompt}</span>
+                          <ArrowRight className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>
@@ -204,6 +295,16 @@ function FeatureRow({ icon, text }: { icon: React.ReactNode; text: string }) {
     <div className="flex items-center gap-3 text-left px-4 py-2 bg-zinc-900/50 border border-zinc-800 rounded-lg">
       <span className="text-zinc-500">{icon}</span>
       <span className="text-xs text-zinc-400">{text}</span>
+    </div>
+  );
+}
+
+function SignalStat({ label, value, tone }: { label: string; value: string; tone: "critical" | "alert" | "info" | "live" }) {
+  const text = tone === "critical" ? "text-red-300" : tone === "alert" ? "text-orange-300" : tone === "info" ? "text-blue-300" : "text-emerald-300";
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2">
+      <p className="text-[9px] uppercase tracking-[0.18em] text-zinc-500">{label}</p>
+      <p className={`mt-1 text-xs font-medium ${text}`}>{value}</p>
     </div>
   );
 }

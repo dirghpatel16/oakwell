@@ -21,8 +21,11 @@ import {
 import { useMemory, useDealAnalysis, useEmailGeneration, useAnalysisRuns, useWorkspace } from "@/lib/hooks";
 import { useWebSocket } from "@/lib/websocket-context";
 import { useDemoMode } from "@/lib/demo-context";
+import { useDashboardSurface } from "@/components/dashboard-shell";
 import { getProofUrl } from "@/lib/api";
 import { DashboardEmptyState, DashboardErrorBanner, DashboardLoadingState } from "@/components/dashboard-state";
+import { DEMO_COMPETITOR_PROFILES, DEMO_DEAL_WORKSPACE } from "@/lib/demo-data";
+import { ActionListPanel, EvidenceListPanel, WorkflowBar } from "@/components/ui/demo-terminal-primitives";
 
 export default function DealDeskPage() {
   const { data: memory, loading: memLoading, error: memError, refresh: refreshMemory, persistenceDegraded, persistenceReason } = useMemory();
@@ -31,6 +34,7 @@ export default function DealDeskPage() {
   const { data: workspace } = useWorkspace();
   const { triggerDealAnalysis } = useWebSocket();
   const { isDemo } = useDemoMode();
+  const { basePath, isDemoSurface } = useDashboardSurface();
   const lastCompletedJobRef = useRef<string | null>(null);
 
   const [transcript, setTranscript] = useState("");
@@ -45,10 +49,17 @@ export default function DealDeskPage() {
   const [copied, setCopied] = useState(false);
   const [pendingPersistenceJobId, setPendingPersistenceJobId] = useState<string | null>(null);
   const [persistenceIssue, setPersistenceIssue] = useState<string | null>(null);
+  const [inFlightCompetitor, setInFlightCompetitor] = useState<{url: string; name: string} | null>(null);
+  const [requestedDealId, setRequestedDealId] = useState<string | null>(null);
+  const [requestedCompetitor, setRequestedCompetitor] = useState<string | null>(null);
 
   const deals = useMemo(() => {
     if (!memory) return [];
     return Object.entries(memory).map(([url, entry]) => ({
+      workspaceRecord: isDemo ? DEMO_DEAL_WORKSPACE.find((record) => {
+        const profile = DEMO_COMPETITOR_PROFILES.find((item) => item.id === record.competitorId);
+        return profile ? profile.domain === url : false;
+      }) : undefined,
       url,
       name: url.replace(/^https?:\/\//, "").replace(/\/$/, ""),
       score: entry.deal_health_score || 0,
@@ -71,7 +82,7 @@ export default function DealDeskPage() {
       analysisRunId: entry.analysis_run_id,
       analysisCompletedAt: entry.analysis_completed_at,
     }));
-  }, [memory]);
+  }, [isDemo, memory]);
 
   const filtered = filterText
     ? deals.filter((d) => d.name.toLowerCase().includes(filterText.toLowerCase()))
@@ -94,6 +105,7 @@ export default function DealDeskPage() {
     Boolean(completedResult) &&
     Boolean(jobStatus?.job_id) &&
     pendingPersistenceJobId === jobStatus?.job_id;
+  const hasActiveAnalysis = isRunning || Boolean(jobStatus && (jobStatus.status === "pending" || jobStatus.status === "running"));
   const validatingPersistence =
     completionPersistencePending && memLoading && !persistedCompletedDeal && !memError;
   const canGenerateCompletionEmail =
@@ -113,6 +125,45 @@ export default function DealDeskPage() {
     ? (persistenceReason || "Memory backend is recovering. Analysis results may not persist across reloads.")
     : null;
   const resolvedYourProduct = yourProduct || workspace?.workspace?.company_name?.trim() || "";
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setRequestedDealId(params.get("deal"));
+    setRequestedCompetitor(params.get("competitor"));
+  }, []);
+
+  useEffect(() => {
+    if (!isDemoSurface || deals.length === 0) return;
+
+    if (requestedDealId) {
+      const matchingDeal = deals.find((deal) => deal.workspaceRecord?.id === requestedDealId || deal.url === requestedDealId);
+      if (matchingDeal && matchingDeal.url !== selectedUrl) {
+        setSelectedUrl(matchingDeal.url);
+        setShowForm(false);
+        return;
+      }
+    }
+
+    if (requestedCompetitor) {
+      const normalized = requestedCompetitor.toLowerCase();
+      const matchingDeal = deals.find((deal) => {
+        const workspaceMatch = deal.workspaceRecord?.competitorId === normalized || deal.workspaceRecord?.competitor.toLowerCase().includes(normalized);
+        const profileMatch = DEMO_COMPETITOR_PROFILES.some((profile) =>
+          profile.domain === deal.url && (profile.id === normalized || profile.name.toLowerCase().includes(normalized) || normalized.includes(profile.name.toLowerCase()))
+        );
+        return workspaceMatch || profileMatch;
+      });
+      if (matchingDeal && matchingDeal.url !== selectedUrl) {
+        setSelectedUrl(matchingDeal.url);
+        setShowForm(false);
+      }
+    }
+  }, [deals, isDemoSurface, requestedCompetitor, requestedDealId, selectedUrl]);
+
+  useEffect(() => {
+    if (!isDemoSurface || selectedUrl || showForm || deals.length === 0) return;
+    setSelectedUrl(deals[0].url);
+  }, [deals, isDemoSurface, selectedUrl, showForm]);
 
   useEffect(() => {
     if (jobStatus?.status !== "completed" || !jobStatus.job_id) return;
@@ -174,6 +225,10 @@ export default function DealDeskPage() {
     if (!transcript || !competitorUrl || memoryUnavailableForAnalysis) return;
     setPersistenceIssue(null);
     setPendingPersistenceJobId(null);
+    setInFlightCompetitor({
+      url: competitorUrl,
+      name: competitorName || competitorUrl.replace(/^https?:\/\//, "").replace(/\/$/, ""),
+    });
     triggerDealAnalysis(competitorName || competitorUrl);
     await analyze({
       transcript,
@@ -230,7 +285,7 @@ export default function DealDeskPage() {
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {memLoading && deals.length === 0 ? (
+          {memLoading && deals.length === 0 && !hasActiveAnalysis ? (
             <div className="p-4">
               <DashboardLoadingState
                 icon={Loader2}
@@ -238,7 +293,7 @@ export default function DealDeskPage() {
                 message="Pulling competitor records, score history, and proof artifacts from the Oakwell memory bank."
               />
             </div>
-          ) : memoryHardError && deals.length === 0 ? (
+          ) : memoryHardError && deals.length === 0 && !hasActiveAnalysis ? (
             <div className="p-4">
               <DashboardErrorBanner
                 title="Memory bank unavailable"
@@ -247,7 +302,7 @@ export default function DealDeskPage() {
                 onAction={refreshMemory}
               />
             </div>
-          ) : filtered.length === 0 ? (
+          ) : filtered.length === 0 && !hasActiveAnalysis ? (
             <div className="p-4">
               <DashboardEmptyState
                 icon={FileText}
@@ -257,28 +312,42 @@ export default function DealDeskPage() {
               />
             </div>
           ) : (
-            filtered.map((deal) => (
-              <div
-                key={deal.url}
-                onClick={() => { setSelectedUrl(deal.url); setShowForm(false); }}
-                className={`p-3 border-b border-zinc-800/50 cursor-pointer group transition-colors ${
-                  selectedUrl === deal.url ? "border-l-2 border-l-blue-500 bg-zinc-900/80" : "hover:bg-zinc-900/50"
-                }`}
-              >
-                <div className="flex justify-between items-start mb-1">
-                  <h3 className="text-sm font-medium text-zinc-300 group-hover:text-white transition-colors truncate">{deal.name}</h3>
-                  <span className="text-xs font-mono text-zinc-500">{deal.score}/100</span>
+            <>
+              {hasActiveAnalysis && inFlightCompetitor && !filtered.some(d => d.url === inFlightCompetitor.url) && (
+                <div className="p-3 border-b border-zinc-800/50 border-l-2 border-l-blue-500 bg-blue-500/5">
+                  <div className="flex justify-between items-start mb-1">
+                    <h3 className="text-sm font-medium text-blue-300 truncate">{inFlightCompetitor.name}</h3>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400 shrink-0" />
+                  </div>
+                  <p className="text-[10px] text-blue-400/60 font-mono">Analysis in progress…</p>
                 </div>
-                <p className="text-[10px] text-zinc-600 mb-2 truncate">Last: {deal.lastContact} • {deal.analyses} runs</p>
-                <div className="flex items-center gap-2">
-                  <span className={`inline-flex text-[9px] font-medium px-1.5 py-0.5 rounded border uppercase tracking-wider ${
-                    deal.risk === "high" ? "bg-red-500/10 text-red-500 border-red-500/20" :
-                    deal.risk === "medium" ? "bg-yellow-500/10 text-yellow-500 border-yellow-500/20" :
-                    "bg-green-500/10 text-green-500 border-green-500/20"
-                  }`}>{deal.risk} risk</span>
+              )}
+              {filtered.map((deal) => (
+                <div
+                  key={deal.url}
+                  onClick={() => { setSelectedUrl(deal.url); setShowForm(false); }}
+                  className={`p-3 border-b border-zinc-800/50 cursor-pointer group transition-colors ${
+                    selectedUrl === deal.url ? "border-l-2 border-l-blue-500 bg-zinc-900/80" : "hover:bg-zinc-900/50"
+                  }`}
+                >
+                  <div className="flex justify-between items-start mb-1">
+                    <h3 className="text-sm font-medium text-zinc-300 group-hover:text-white transition-colors truncate">{deal.workspaceRecord?.account || deal.name}</h3>
+                    <span className="text-xs font-mono text-zinc-500">{deal.score}/100</span>
+                  </div>
+                  <p className="text-[10px] text-zinc-600 mb-2 truncate">
+                    {deal.workspaceRecord ? `${deal.workspaceRecord.competitor} · ${deal.workspaceRecord.stage}` : `Last: ${deal.lastContact}`} • {deal.analyses} runs
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <span className={`inline-flex text-[9px] font-medium px-1.5 py-0.5 rounded border uppercase tracking-wider ${
+                      deal.risk === "high" ? "bg-red-500/10 text-red-500 border-red-500/20" :
+                      deal.risk === "medium" ? "bg-yellow-500/10 text-yellow-500 border-yellow-500/20" :
+                      "bg-green-500/10 text-green-500 border-green-500/20"
+                    }`}>{deal.risk} risk</span>
+                    {deal.workspaceRecord ? <span className="text-[9px] font-mono text-zinc-500">{deal.workspaceRecord.watchlist}</span> : null}
+                  </div>
                 </div>
-              </div>
-            ))
+              ))}
+            </>
           )}
         </div>
       </div>
@@ -468,6 +537,22 @@ export default function DealDeskPage() {
           </div>
         )}
 
+        {!showForm && hasActiveAnalysis && !activeDeal && !completedResult && (
+          <div className="flex-1 flex flex-col items-center justify-center text-center px-8 space-y-4 py-12">
+            <div className="w-14 h-14 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
+              <Activity className="w-6 h-6 text-blue-400 animate-pulse" />
+            </div>
+            <div>
+              <h3 className="text-base font-semibold text-zinc-300">
+                Analyzing {inFlightCompetitor?.name || "competitor"}…
+              </h3>
+              <p className="text-sm text-zinc-600 mt-1.5 max-w-sm">
+                Oakwell&apos;s 10-stage pipeline is cross-referencing the transcript against live competitor data. Results will appear here when the analysis completes.
+              </p>
+            </div>
+          </div>
+        )}
+
         {completedResult && !showForm && validatingPersistence && (
           <div className="p-6 max-w-3xl">
             <DashboardLoadingState
@@ -644,8 +729,8 @@ export default function DealDeskPage() {
           <div className="p-6 space-y-6 max-w-3xl">
             <div className="flex items-start justify-between">
               <div>
-                <h2 className="text-xl font-semibold text-white mb-1">{activeDeal.name}</h2>
-                <p className="text-sm text-zinc-500">Last analyzed: {activeDeal.lastContact} • {activeDeal.analyses} analyses</p>
+                <h2 className="text-xl font-semibold text-white mb-1">{activeDeal.workspaceRecord?.account || activeDeal.name}</h2>
+                <p className="text-sm text-zinc-500">{activeDeal.workspaceRecord ? `${activeDeal.workspaceRecord.competitor} · ${activeDeal.workspaceRecord.stage} · ${activeDeal.workspaceRecord.owner}` : `Last analyzed: ${activeDeal.lastContact}`} • {activeDeal.analyses} analyses</p>
               </div>
               <div className="text-right">
                 <div className={`text-3xl font-mono font-bold ${
@@ -655,6 +740,61 @@ export default function DealDeskPage() {
                 <div className="text-xs text-zinc-500">Health Score</div>
               </div>
             </div>
+
+            {isDemoSurface && activeDeal.workspaceRecord ? (
+              <WorkflowBar
+                actions={[
+                  { label: "Share brief", href: `${basePath}/executive`, tone: "info" },
+                  { label: "Open competitor profile", href: `${basePath}/targets?competitor=${encodeURIComponent(activeDeal.workspaceRecord.competitorId)}`, tone: "live" },
+                  { label: "Open evidence", href: `${basePath}/alerts?competitor=${encodeURIComponent(activeDeal.workspaceRecord.competitorId)}`, tone: "alert" },
+                  { label: "Push to Slack", tone: "critical" },
+                  { label: "Assign follow-up", tone: "low" },
+                ]}
+              />
+            ) : null}
+
+            {isDemoSurface && activeDeal.workspaceRecord ? (
+              <div className="grid gap-4 xl:grid-cols-2">
+                <div className="space-y-4">
+                  <EvidenceListPanel
+                    title="Truth Pane"
+                    subtitle={`${activeDeal.workspaceRecord.evidenceCount} evidence items · ${activeDeal.workspaceRecord.sourceCoverage} source groups · ${activeDeal.workspaceRecord.freshness}`}
+                    items={(DEMO_COMPETITOR_PROFILES.find((profile) => profile.domain === activeDeal.url)?.evidence || []).slice(0, 3)}
+                  />
+                  <div className="rounded-2xl border border-zinc-800 bg-[#0a0a0a] p-4">
+                    <h4 className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200">Why Oakwell believes this</h4>
+                    <p className="mt-3 text-sm leading-relaxed text-zinc-300">{activeDeal.workspaceRecord.truthSummary}</p>
+                    <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-zinc-500">
+                      <span className="rounded-full border border-zinc-800 bg-zinc-900 px-2 py-1">Urgency {activeDeal.workspaceRecord.urgency}/10</span>
+                      <span className="rounded-full border border-zinc-800 bg-zinc-900 px-2 py-1">{Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(activeDeal.workspaceRecord.arr)}</span>
+                      <span className="rounded-full border border-zinc-800 bg-zinc-900 px-2 py-1">{activeDeal.workspaceRecord.watchlist}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-4">
+                  <ActionListPanel
+                    title="Action Pane"
+                    subtitle="Stage-specific next steps for the rep, manager, and exec team."
+                    items={[activeDeal.workspaceRecord.nextAction, ...activeDeal.workspaceRecord.actionPlan]}
+                  />
+                  <div className="rounded-2xl border border-zinc-800 bg-[#0a0a0a] p-4">
+                    <h4 className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200">Integrated Workflow</h4>
+                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                      {[
+                        "Save view",
+                        "Mark for exec review",
+                        "Open talk track",
+                        "Export brief",
+                      ].map((item) => (
+                        <button key={item} className="rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-left text-xs text-zinc-300 transition-colors hover:border-zinc-700">
+                          {item}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             {activeDeal.clashes && (
               <div className="bg-[#0a0a0a] border border-zinc-800 rounded-lg p-4">
@@ -761,7 +901,7 @@ export default function DealDeskPage() {
           </div>
         )}
 
-        {!showForm && !completedResult && !selectedDeal && (
+        {!showForm && !completedResult && !selectedDeal && !hasActiveAnalysis && (
           <div className="flex flex-col items-center justify-center h-full text-center px-8 space-y-4">
             <div className="w-16 h-16 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center">
               <Activity className="w-7 h-7 text-zinc-600" />

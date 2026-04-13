@@ -1,5 +1,5 @@
 "use client";
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import {
   BarChart,
   Bar,
@@ -22,9 +22,15 @@ import {
   Loader2,
   BarChart3,
   Activity,
+  Sparkles,
+  ChevronRight,
 } from "lucide-react";
 import { useMemory, useWinningPatterns } from "@/lib/hooks";
+import { useDashboardSurface } from "@/components/dashboard-shell";
 import { DashboardErrorBanner } from "@/components/dashboard-state";
+import { DEMO_COMPETITOR_PROFILES, DEMO_DEAL_WORKSPACE, DEMO_EXECUTIVE_BRIEF, DEMO_PIPELINE_RISK } from "@/lib/demo-data";
+import { LiveBadge, StatusChip } from "@/components/ui/live-indicators";
+import { ActionListPanel, EvidenceListPanel, WorkflowBar } from "@/components/ui/demo-terminal-primitives";
 
 const CHART_COLORS = ["#ef4444", "#f97316", "#3b82f6", "#8b5cf6", "#22c55e", "#eab308"];
 
@@ -48,10 +54,15 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 export default function ExecutivePortalPage() {
   const { data: memory, loading: memLoading, error: memError, refresh: refreshMemory } = useMemory();
   const { data: patterns, loading: patLoading } = useWinningPatterns();
+  const { isDemoSurface, basePath } = useDashboardSurface();
+  const [selectedThreat, setSelectedThreat] = useState("Gong");
 
   const loading = memLoading || patLoading;
 
   const metrics = useMemo(() => {
+    if (isDemoSurface) {
+      return { total: 6, avgScore: 61, highRisk: 3, totalAnalyses: 55 };
+    }
     if (!memory) return null;
     const entries = Object.entries(memory);
     const scores = entries.map(([, e]) => e.deal_health_score || 0);
@@ -62,6 +73,9 @@ export default function ExecutivePortalPage() {
   }, [memory]);
 
   const winRate = useMemo(() => {
+    if (isDemoSurface) {
+      return { rate: 68, wins: 32, losses: 15, stalls: 4 };
+    }
     if (!patterns) return { rate: 0, wins: 0, losses: 0, stalls: 0 };
     const wins = Math.round(patterns.win_rate * patterns.total_outcomes);
     const losses = patterns.total_outcomes - wins;
@@ -71,6 +85,13 @@ export default function ExecutivePortalPage() {
   }, [patterns]);
 
   const landscape = useMemo(() => {
+    if (isDemoSurface) {
+      return DEMO_PIPELINE_RISK.map((item, i) => ({
+        name: item.competitor,
+        value: Math.round(item.arr / 10000),
+        color: CHART_COLORS[i % CHART_COLORS.length],
+      }));
+    }
     if (!memory) return [];
     return Object.entries(memory).map(([url, e], i) => ({
       name: url.replace(/^https?:\/\//, "").replace(/\/$/, ""),
@@ -80,6 +101,12 @@ export default function ExecutivePortalPage() {
   }, [memory]);
 
   const scoreChart = useMemo(() => {
+    if (isDemoSurface) {
+      return DEMO_PIPELINE_RISK.map((item, index) => ({
+        name: item.competitor.slice(0, 15),
+        score: [72, 58, 38, 65, 81][index] || 60,
+      }));
+    }
     if (!memory) return [];
     return Object.entries(memory).map(([url, e]) => ({
       name: url.replace(/^https?:\/\//, "").replace(/\/$/, "").slice(0, 15),
@@ -88,6 +115,14 @@ export default function ExecutivePortalPage() {
   }, [memory]);
 
   const scoreHistory = useMemo(() => {
+    if (isDemoSurface) {
+      return [
+        { analysis: "Jan", score: 57 },
+        { analysis: "Feb", score: 60 },
+        { analysis: "Mar", score: 63 },
+        { analysis: "Apr", score: 61 },
+      ];
+    }
     if (!memory) return [];
     const all: { ts: string; score: number }[] = [];
     Object.values(memory).forEach((e) => {
@@ -104,6 +139,13 @@ export default function ExecutivePortalPage() {
   }, [memory]);
 
   const execAlerts = useMemo(() => {
+    if (isDemoSurface) {
+      return [
+        { severity: "critical", title: "Gong pricing pressure on $420K pipeline", impact: "Immediate executive backup needed on two committee deals.", time: "11m ago" },
+        { severity: "high", title: "Clari narrative drift driving confusion", impact: "Marketing says autonomous; field needs a clean rebuttal.", time: "24m ago" },
+        { severity: "medium", title: "Crayon startup bundle entering SMB funnel", impact: "Packaging pressure could slow early-stage conversion.", time: "42m ago" },
+      ];
+    }
     if (!memory) return [];
     const items: { severity: string; title: string; impact: string; time: string }[] = [];
     Object.entries(memory).forEach(([url, e]) => {
@@ -122,6 +164,13 @@ export default function ExecutivePortalPage() {
     return items.sort((a, b) => (order[a.severity] || 4) - (order[b.severity] || 4));
   }, [memory]);
 
+  const selectedProfile = DEMO_COMPETITOR_PROFILES.find((profile) => {
+    const lhs = profile.name.toLowerCase();
+    const rhs = selectedThreat.toLowerCase();
+    return lhs === rhs || lhs.includes(rhs) || rhs.includes(lhs.split(" /")[0]);
+  }) || DEMO_COMPETITOR_PROFILES[0];
+  const selectedDeals = DEMO_DEAL_WORKSPACE.filter((deal) => deal.competitorId === selectedProfile.id);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full gap-3 py-20">
@@ -132,11 +181,15 @@ export default function ExecutivePortalPage() {
   }
 
   return (
-    <div className="p-6 md:p-8 max-w-[1600px] mx-auto space-y-8 animate-fade-up">
-      <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between border-b border-zinc-800 pb-6">
+    <div className="p-4 md:p-6 max-w-[1600px] mx-auto space-y-5 animate-fade-up">
+      <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between border-b border-zinc-800 pb-4">
         <div>
-          <h1 className="text-2xl font-semibold text-white tracking-tight">Executive Portal</h1>
-          <p className="text-sm text-zinc-500 mt-1">Board-ready competitive intelligence — live from Oakwell AI</p>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-semibold text-white tracking-tight">Executive Portal</h1>
+            <LiveBadge label="LIVE" color="green" />
+            {isDemoSurface && <StatusChip label="BOARD READY" variant="info" />}
+          </div>
+          <p className="text-xs text-zinc-500 mt-0.5">Board-ready competitive intelligence — live from Oakwell AI</p>
         </div>
         <div className="flex items-center gap-3">
           <button className="flex items-center gap-1.5 text-xs font-medium bg-white text-black hover:bg-zinc-200 px-3 py-1.5 rounded transition-colors">
@@ -160,6 +213,93 @@ export default function ExecutivePortalPage() {
         <ExecMetric icon={<ShieldAlert className="w-4 h-4 text-amber-400" />} title="Avg Health" value={`${metrics?.avgScore || 0}/100`} change={metrics?.avgScore && metrics.avgScore >= 60 ? "Healthy" : "At Risk"} positive={(metrics?.avgScore || 0) >= 60} subtitle="Across all competitors" />
         <ExecMetric icon={<BarChart3 className="w-4 h-4 text-purple-400" />} title="Analyses" value={String(metrics?.totalAnalyses || 0)} change="Total" positive subtitle="Deal intelligence runs" />
       </div>
+
+      {isDemoSurface ? (
+        <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
+          <div className="rounded-2xl border border-zinc-800 bg-gradient-to-br from-[#10141f] via-[#090909] to-[#050505] p-5">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-blue-400" />
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-200">Executive brief</h2>
+            </div>
+            <p className="mt-4 text-xl font-semibold leading-snug text-white">{DEMO_EXECUTIVE_BRIEF.headline}</p>
+            <p className="mt-3 text-sm leading-relaxed text-zinc-400">{DEMO_EXECUTIVE_BRIEF.outlook}</p>
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <div className="rounded-xl border border-zinc-800 bg-black/20 p-4">
+                <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">Top strategic threats</p>
+                <ul className="mt-3 space-y-2">
+                  {DEMO_EXECUTIVE_BRIEF.threats.map((threat) => (
+                    <li key={threat} className="flex gap-2 text-sm text-zinc-300">
+                      <span className="mt-1 h-1.5 w-1.5 rounded-full bg-orange-400 shrink-0" />
+                      {threat}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="rounded-xl border border-zinc-800 bg-black/20 p-4">
+                <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">Recommended moves</p>
+                <ul className="mt-3 space-y-2">
+                  {DEMO_EXECUTIVE_BRIEF.recommendations.map((item) => (
+                    <li key={item} className="flex gap-2 text-sm text-zinc-300">
+                      <span className="mt-0.5 text-blue-400">→</span>
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-zinc-800 bg-[#0a0a0a] p-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-200">Board drill-down</h2>
+              <span className="text-[10px] font-mono text-zinc-500">Q2 outlook</span>
+            </div>
+            <div className="mt-4 space-y-3">
+              {DEMO_PIPELINE_RISK.slice(0, 4).map((row) => (
+                <button key={row.competitor} type="button" onClick={() => setSelectedThreat(row.competitor)} className={`w-full rounded-xl border p-4 text-left ${selectedThreat === row.competitor ? "border-blue-500/40 bg-blue-500/10" : "border-zinc-800 bg-zinc-950/70"}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-white">{row.competitor}</p>
+                      <p className="mt-1 text-[11px] text-zinc-500">{row.accounts} strategic accounts · {row.stage}</p>
+                    </div>
+                    <span className="text-sm font-semibold text-zinc-200">{Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(row.arr)}</span>
+                  </div>
+                  <div className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-blue-300">
+                    Open action view <ChevronRight className="h-3.5 w-3.5" />
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isDemoSurface ? (
+        <div className="grid gap-4 xl:grid-cols-2">
+          <EvidenceListPanel
+            title="Board Truth"
+            subtitle={`${selectedProfile.name} is one of the top concentration risks. Evidence is surfaced before recommendation.`}
+            items={selectedProfile.evidence.slice(0, 3)}
+          />
+          <div className="space-y-4">
+            <ActionListPanel
+              title="Board Actions"
+              subtitle="Concise strategic moves that can be narrated in under 30 seconds."
+              items={[
+                selectedProfile.recommendedAction,
+                ...selectedDeals.map((deal) => `${deal.account}: ${deal.nextAction}`),
+              ]}
+            />
+            <WorkflowBar
+              actions={[
+                { label: "Export brief", tone: "info" },
+                { label: "Open underlying deals", href: `${basePath}/deals`, tone: "live" },
+                { label: "Open threat feed", href: `${basePath}/alerts`, tone: "alert" },
+              ]}
+            />
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-[#0a0a0a] border border-zinc-800 rounded-lg p-5">

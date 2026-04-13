@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ShieldAlert,
   TrendingUp,
@@ -11,10 +11,14 @@ import {
   BellOff,
   Filter,
   Loader2,
+  Crosshair,
 } from "lucide-react";
 import { useMemory } from "@/lib/hooks";
 import { useDashboardSurface } from "@/components/dashboard-shell";
 import { DashboardEmptyState, DashboardErrorBanner, DashboardLoadingState } from "@/components/dashboard-state";
+import { DEMO_ALERT_DETAILS, DEMO_COMPETITOR_PROFILES, DEMO_DEAL_WORKSPACE, DEMO_THREAT_INTEL_ALERTS } from "@/lib/demo-data";
+import { LiveBadge, StatusChip } from "@/components/ui/live-indicators";
+import { ActionListPanel, EvidenceListPanel, WorkflowBar } from "@/components/ui/demo-terminal-primitives";
 
 type AlertSeverity = "critical" | "high" | "medium" | "low";
 
@@ -31,10 +35,33 @@ interface Alert {
 
 export default function ThreatIntelPage() {
   const [filter, setFilter] = useState<"all" | AlertSeverity>("all");
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [competitorFilter, setCompetitorFilter] = useState("all");
+  const [selectedAlertId, setSelectedAlertId] = useState<string | null>(null);
+  const [requestedAlertId, setRequestedAlertId] = useState<string | null>(null);
+  const [requestedCompetitor, setRequestedCompetitor] = useState<string | null>(null);
   const { data: memory, loading: memLoading, error: memError, refresh: refreshMemory } = useMemory();
   const { basePath, isDemoSurface } = useDashboardSurface();
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setRequestedAlertId(params.get("alert"));
+    setRequestedCompetitor(params.get("competitor"));
+  }, []);
+
   const alerts: Alert[] = useMemo(() => {
+    if (isDemoSurface) {
+      return DEMO_THREAT_INTEL_ALERTS.map((alert) => ({
+        id: alert.id,
+        severity: alert.severity as AlertSeverity,
+        title: `${alert.competitor} — ${alert.source}`,
+        description: `${alert.summary}\n\nNext action: ${alert.action}`,
+        source: alert.source,
+        competitor: alert.competitor,
+        timestamp: timeAgo(alert.timestamp),
+        isRead: alert.severity === "low",
+      }));
+    }
     if (!memory) return [];
     const items: Alert[] = [];
     let id = 0;
@@ -83,14 +110,67 @@ export default function ThreatIntelPage() {
   }, [memory]);
 
   const unreadCount = alerts.filter((a) => !a.isRead).length;
-  const filtered = filter === "all" ? alerts : alerts.filter((a) => a.severity === filter);
+  const availableSources = ["all", ...new Set(alerts.map((a) => a.source))];
+  const availableCompetitors = ["all", ...new Set(alerts.map((a) => a.competitor))];
+  const filtered = alerts.filter((alert) => {
+    if (filter !== "all" && alert.severity !== filter) return false;
+    if (sourceFilter !== "all" && alert.source !== sourceFilter) return false;
+    if (competitorFilter !== "all" && alert.competitor !== competitorFilter) return false;
+    return true;
+  });
+
+  useEffect(() => {
+    if (!isDemoSurface) return;
+
+    if (requestedCompetitor) {
+      const profile = DEMO_COMPETITOR_PROFILES.find((item) =>
+        item.id === requestedCompetitor.toLowerCase() ||
+        item.name.toLowerCase().includes(requestedCompetitor.toLowerCase()) ||
+        requestedCompetitor.toLowerCase().includes(item.name.toLowerCase())
+      );
+      if (profile) {
+        const competitorName = profile.name.includes(" /") ? profile.name.split(" /")[0] : profile.name;
+        if (competitorFilter !== competitorName) {
+          setCompetitorFilter(competitorName);
+        }
+      }
+    }
+
+    if (requestedAlertId && requestedAlertId !== selectedAlertId) {
+      const exists = DEMO_ALERT_DETAILS.some((item) => item.id === requestedAlertId);
+      if (exists) {
+        setSelectedAlertId(requestedAlertId);
+      }
+    }
+  }, [competitorFilter, isDemoSurface, requestedAlertId, requestedCompetitor, selectedAlertId]);
+
+  useEffect(() => {
+    if (!isDemoSurface || selectedAlertId || filtered.length === 0) return;
+    setSelectedAlertId(filtered[0].id);
+  }, [filtered, isDemoSurface, selectedAlertId]);
+
+  const selectedAlertDetail = DEMO_ALERT_DETAILS.find((item) => item.id === selectedAlertId) || null;
+  const selectedProfile = selectedAlertDetail
+    ? DEMO_COMPETITOR_PROFILES.find((profile) => profile.id === selectedAlertDetail.competitorId) || null
+    : null;
+  const selectedDeals = selectedAlertDetail
+    ? DEMO_DEAL_WORKSPACE.filter((deal) => selectedAlertDetail.linkedDealIds.includes(deal.id))
+    : [];
+  const selectedEvidence = selectedProfile && selectedAlertDetail
+    ? selectedProfile.evidence.filter((item) => selectedAlertDetail.evidenceIds.includes(item.id))
+    : [];
 
   return (
-    <div className="p-6 md:p-8 max-w-[1200px] mx-auto space-y-6">
-      <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between border-b border-zinc-800 pb-6">
+    <div className="relative flex h-full">
+      <div className={`flex-1 min-w-0 p-4 md:p-6 max-w-[1200px] mx-auto space-y-4 transition-all duration-300 ${selectedAlertDetail ? "xl:mr-[420px]" : ""}`}>
+      <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between border-b border-zinc-800 pb-4">
         <div>
-          <h1 className="text-2xl font-semibold text-white tracking-tight">Threat Intelligence</h1>
-          <p className="text-sm text-zinc-500 mt-1">
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-semibold text-white tracking-tight">Threat Intelligence</h1>
+            <LiveBadge count={filtered.length} label="" color="red" />
+            {isDemoSurface && <StatusChip label="6 SOURCES" variant="wire" />}
+          </div>
+          <p className="text-xs text-zinc-500 mt-0.5">
             All competitive signals across deals, market scans, and agent reports
           </p>
         </div>
@@ -106,22 +186,28 @@ export default function ThreatIntelPage() {
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
-        <Filter className="w-3.5 h-3.5 text-zinc-500" />
-        {(["all", "critical", "high", "medium", "low"] as const).map((f) => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`text-[10px] uppercase tracking-wider font-medium px-2.5 py-1 rounded transition-colors ${
-              filter === f
-                ? "bg-zinc-800 text-white border border-zinc-700"
-                : "text-zinc-500 hover:text-zinc-300 border border-transparent"
-            }`}
-          >
-            {f}
-          </button>
-        ))}
-        <span className="text-[10px] text-zinc-600 font-mono ml-2">{filtered.length} alerts</span>
+      <div className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-[#0a0a0a] p-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Filter className="w-3.5 h-3.5 text-zinc-500" />
+          {(["all", "critical", "high", "medium", "low"] as const).map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`text-[10px] uppercase tracking-wider font-medium px-2.5 py-1 rounded transition-colors ${
+                filter === f
+                  ? "bg-zinc-800 text-white border border-zinc-700"
+                  : "text-zinc-500 hover:text-zinc-300 border border-transparent"
+              }`}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <SelectChip value={sourceFilter} onChange={setSourceFilter} options={availableSources} label="Source" />
+          <SelectChip value={competitorFilter} onChange={setCompetitorFilter} options={availableCompetitors} label="Competitor" />
+          <span className="text-[10px] text-zinc-600 font-mono ml-2">{filtered.length} alerts</span>
+        </div>
       </div>
 
       {memError ? (
@@ -155,15 +241,107 @@ export default function ThreatIntelPage() {
       {!memLoading && filtered.length > 0 && (
         <div className="space-y-3">
           {filtered.map((alert) => (
-            <AlertCard key={alert.id} alert={alert} basePath={basePath} />
+            <AlertCard key={alert.id} alert={alert} basePath={basePath} selected={selectedAlertId === alert.id} onSelect={() => setSelectedAlertId(alert.id)} />
           ))}
         </div>
       )}
+
+      {isDemoSurface ? (
+        <div className="rounded-2xl border border-zinc-800 bg-[#0a0a0a] p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200">Priority Monitoring</h2>
+              <p className="mt-1 text-[11px] text-zinc-500">Use filters as saved views instead of static dashboard cards.</p>
+            </div>
+            <StatusChip label="WATCHLIST" variant="wire" />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button className="rounded-full border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-[11px] text-zinc-300">Late-stage pricing</button>
+            <button className="rounded-full border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-[11px] text-zinc-300">Message drift</button>
+            <button className="rounded-full border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-[11px] text-zinc-300">Hiring spikes</button>
+            <button className="rounded-full border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-[11px] text-zinc-300">Exec review</button>
+          </div>
+        </div>
+      ) : null}
+      </div>
+
+      {selectedAlertDetail && selectedProfile ? (
+        <aside className="hidden xl:flex fixed right-0 top-14 bottom-7 w-[420px] flex-col border-l border-zinc-800 bg-[#08090d] z-20 overflow-hidden">
+          <div className="border-b border-zinc-800 bg-[#0d111a] px-4 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">Alert Detail</p>
+                <h2 className="mt-1 text-sm font-semibold text-white">{selectedAlertDetail.title}</h2>
+                <p className="mt-1 text-[11px] text-zinc-500">{selectedProfile.name} · {selectedAlertDetail.source} · {timeAgo(selectedAlertDetail.timestamp)}</p>
+              </div>
+              <StatusChip label={selectedAlertDetail.severity.toUpperCase()} variant={selectedAlertDetail.severity === "critical" ? "critical" : selectedAlertDetail.severity === "high" ? "alert" : "info"} />
+            </div>
+            <div className="mt-4">
+              <WorkflowBar
+                actions={[
+                  { label: "Open competitor profile", href: `${basePath}/targets?competitor=${encodeURIComponent(selectedProfile.id)}`, tone: "info" },
+                  { label: "Open deals", href: `${basePath}/deals?deal=${encodeURIComponent(selectedDeals[0]?.id || "")}`, tone: "live" },
+                  { label: "Mark for exec review", href: `${basePath}/executive?competitor=${encodeURIComponent(selectedProfile.id)}`, tone: "critical" },
+                ]}
+              />
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <EvidenceListPanel
+              title="Evidence Before Opinion"
+              subtitle={`${selectedEvidence.length} linked evidence items · ${selectedProfile.sourceCount} total sources`}
+              items={selectedEvidence}
+            />
+            <div className="rounded-2xl border border-zinc-800 bg-[#0a0a0a] p-4">
+              <h3 className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200">Why Oakwell believes this</h3>
+              <p className="mt-3 text-sm leading-relaxed text-zinc-300">{selectedAlertDetail.whyOakwellBelieves}</p>
+            </div>
+            <ActionListPanel title="What to do next" subtitle="Truth in one pane, action in the next." items={[selectedAlertDetail.action, ...selectedDeals.map((deal) => `${deal.account}: ${deal.nextAction}`)]} />
+            <div className="rounded-2xl border border-zinc-800 bg-[#0a0a0a] p-4">
+              <h3 className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200">Underlying Deals</h3>
+              <div className="mt-4 space-y-2">
+                {selectedDeals.map((deal) => (
+                  <Link key={deal.id} href={`${basePath}/deals?deal=${encodeURIComponent(deal.id)}`} className="block rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-3 transition-colors hover:border-zinc-700">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-medium text-zinc-200">{deal.account}</p>
+                      <span className="text-[10px] font-mono text-zinc-500">{deal.stage}</span>
+                    </div>
+                    <p className="mt-1 text-[11px] text-zinc-500">{deal.owner} · {deal.watchlist}</p>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          </div>
+        </aside>
+      ) : null}
+
+      {selectedAlertDetail && selectedProfile ? (
+        <div className="xl:hidden border-t border-zinc-800 bg-[#08090d] px-4 py-4">
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-zinc-800 bg-[#0d111a] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">Selected Alert</p>
+                  <h2 className="mt-1 text-sm font-semibold text-white">{selectedAlertDetail.title}</h2>
+                  <p className="mt-1 text-[11px] text-zinc-500">{selectedProfile.name} · {selectedAlertDetail.source}</p>
+                </div>
+                <StatusChip label={selectedAlertDetail.severity.toUpperCase()} variant={selectedAlertDetail.severity === "critical" ? "critical" : selectedAlertDetail.severity === "high" ? "alert" : "info"} />
+              </div>
+            </div>
+            <EvidenceListPanel
+              title="Evidence Before Opinion"
+              subtitle={`${selectedEvidence.length} linked evidence items · ${selectedProfile.sourceCount} total sources`}
+              items={selectedEvidence}
+            />
+            <ActionListPanel title="What to do next" subtitle="Truth in one pane, action in the next." items={[selectedAlertDetail.action, ...selectedDeals.map((deal) => `${deal.account}: ${deal.nextAction}`)]} />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function AlertCard({ alert, basePath }: { alert: Alert; basePath: string }) {
+function AlertCard({ alert, basePath, selected, onSelect }: { alert: Alert; basePath: string; selected?: boolean; onSelect?: () => void }) {
   const [expanded, setExpanded] = useState(false);
 
   const severityColors: Record<AlertSeverity, string> = {
@@ -189,8 +367,11 @@ function AlertCard({ alert, basePath }: { alert: Alert; basePath: string }) {
 
   return (
     <div
-      className={`border border-zinc-800 border-l-2 ${severityColors[alert.severity]} rounded-lg overflow-hidden transition-colors hover:border-zinc-700 cursor-pointer`}
-      onClick={() => setExpanded(!expanded)}
+      className={`border border-zinc-800 border-l-2 ${severityColors[alert.severity]} rounded-lg overflow-hidden transition-colors hover:border-zinc-700 cursor-pointer ${selected ? "ring-1 ring-blue-500/40" : ""}`}
+      onClick={() => {
+        setExpanded(!expanded);
+        onSelect?.();
+      }}
     >
       <div className="px-5 py-4 flex items-start gap-4">
         <div className="mt-0.5 shrink-0">{severityIcons[alert.severity]}</div>
@@ -221,13 +402,46 @@ function AlertCard({ alert, basePath }: { alert: Alert; basePath: string }) {
         <div className="px-5 pb-4 pt-0 ml-8 border-t border-zinc-800/30 mt-0 pt-4 space-y-3">
           <p className="text-sm text-zinc-400 leading-relaxed">{alert.description}</p>
           <div className="flex items-center gap-2 pt-2">
-            <Link href={`${basePath}/deals`} className="text-xs bg-white text-black hover:bg-zinc-200 transition-colors px-3 py-1.5 rounded font-medium">
+            <Link href={`${basePath}/deals?competitor=${encodeURIComponent(alert.competitor)}`} className="text-xs bg-white text-black hover:bg-zinc-200 transition-colors px-3 py-1.5 rounded font-medium">
               Open Deal Desk
+            </Link>
+            <Link href={`${basePath}/targets?competitor=${encodeURIComponent(alert.competitor)}`} className="text-xs border border-zinc-700 bg-zinc-900 px-3 py-1.5 rounded font-medium text-zinc-300 hover:text-white hover:border-zinc-600">
+              Open Sentinel
             </Link>
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+function SelectChip({
+  value,
+  onChange,
+  options,
+  label,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: string[];
+  label: string;
+}) {
+  return (
+    <label className="inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-[10px] font-medium text-zinc-400">
+      <Crosshair className="h-3 w-3 text-zinc-500" />
+      {label}
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="bg-transparent text-zinc-200 focus:outline-none"
+      >
+        {options.map((option) => (
+          <option key={option} value={option} className="bg-zinc-950 text-zinc-200">
+            {option}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

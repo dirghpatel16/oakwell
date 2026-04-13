@@ -39,6 +39,14 @@ The platform uses multi-agent AI to cross-reference sales transcripts with live 
 - **API Billing (Model A)**: Removed `X-Google-API-Key` requirement; backend now uses server-side env vars.
 - **Git Sync**: All local changes committed and pushed to GitHub (`main`).
 - **Memory Graceful Degradation**: The `/memory` backend endpoint now returns `{}` with `_persistence_degraded: true` metadata when Firestore is unavailable, instead of a hard HTTP 503. The frontend Deal Desk shows an amber degraded-mode warning banner that lets users continue running analyses instead of completely blocking the page. The `/analyze-deal` write path still enforces the 503 gate.
+- **Deal Desk In-Flight Analysis UX**: `deals-page.tsx` now tracks `inFlightCompetitor` state so the UI never blanks out during a running analysis. The left rail shows the in-flight competitor, the right pane shows an analysis workspace panel, and all empty/loading/error states are guarded behind `!hasActiveAnalysis`.
+- **useQuery Stale-While-Revalidate**: `hooks.ts` now implements SWR behavior — only the first fetch shows a loading spinner; subsequent background refetches keep old data visible and silently update on success. This eliminates blank-state flashes across all pages during 30s/60s auto-refresh intervals.
+- **War Room Duplicate Function Fix**: Removed a duplicate `FeedItem` function definition in `war-room-page.tsx` that caused build failures.
+- **TypeScript Build Fixes**: Fixed `as const` on ternary expression in `war-room-page.tsx` and union type access on `pricingSignal` property in `targets-page.tsx` that blocked production builds.
+- **Demo Intelligence Terminal Pass**: The `/demo` surface now behaves like a connected operating system instead of isolated dashboard cards. `demo-data.ts` now includes shared competitor profiles, linked deals, alert details, watchlist metrics, and an entity graph model reused across War Room, Deal Desk, Market Sentinel, Threat Intel, Forecast, Executive Portal, Sidekick, and Settings.
+- **Bloomberg-Inspired Demo Navigation**: The demo shell now has a persistent Oakwell Pulse strip plus a bottom signal ticker. War Room gained a competitor/entity graph, watchlist summary, what-changed-today routing, and truth/action panes. Market Sentinel and Threat Intel now have right-side detail drawers with evidence, linked deals, and workflow actions. Forecast and Executive now support competitor concentration drill-downs. Deal Desk defaults into a seeded demo record with truth/action layout. Sidekick and Settings now expose live coaching/integration-health states.
+- **Demo Drill-Down Context Wiring**: Demo route handoffs now preserve intent instead of dropping the user into generic pages. War Room, Deal Desk, Threat Intel, and Market Sentinel pass competitor/deal/alert context through query params, and the destination pages now honor those deep links on load. This keeps the demo feeling like a connected operating system rather than disconnected page jumps.
+- **Market Sentinel Relationship Map Upgrade**: The abstract Sentinel entity graph was replaced in the detail view with a clearer Bloomberg-style relationship map that shows linked deals, the selected competitor posture, and adjacent market context in one pane. Sentinel and Threat Intel also now render usable detail sections on smaller screens instead of relying only on the desktop right drawer.
 
 ## In progress
 - Cloud Run + Vercel redeploy needed to activate Workspace Personas in production.
@@ -49,6 +57,8 @@ The platform uses multi-agent AI to cross-reference sales transcripts with live 
 - Verifying that the new shell-level navigation fallback behaves cleanly in production after the latest preview/production deploys, especially on memory-error screens.
 - Integration of Server-Sent Events (SSE) for live agent status updates.
 - Auditing the remaining dashboard surfaces (`forecast`, `executive`, `sidekick`) against real backend payloads.
+- Tightening the demo mobile behavior for the new right-side drawers and dense graph panels.
+- Extending the new drill-down system so Forecast, Executive, and Sidekick also open in fully pre-filtered in-route states instead of only route-level drill-downs.
 - Defining the next backend moat beyond wrapper behavior: multi-source evidence retrieval, richer memory, and stronger retrieval/agent strategy for enterprise-grade competitive intelligence.
 
 ## Pending decisions
@@ -78,6 +88,7 @@ The platform uses multi-agent AI to cross-reference sales transcripts with live 
 ## Files to inspect first
 - `website-2/src/lib/demo-data.ts`: Source of truth for all mock investor data.
 - `website-2/src/components/dashboard-shell.tsx`: Shared layout logic for both dashboards.
+- `website-2/src/components/ui/demo-terminal-primitives.tsx`: Shared graph/evidence/action/workflow components for the demo operating surfaces.
 - `website-2/src/lib/demo-context.tsx`: Context provider that manages `forced` demo mode locking.
 - `website-2/src/lib/hooks.ts`: Data fetching hooks that automatically switch between mock data and real API calls.
 - `website-2/src/lib/websocket-context.tsx`: Core provider for real-time operations, currently simulating alerts in demo mode.

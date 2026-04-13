@@ -14,9 +14,10 @@ import {
   Smartphone,
   Menu,
   X,
-  FlaskConical,
 } from "lucide-react";
 import { LiveActivityPanel, ConnectionStatus, NotificationBell } from "@/components/live-activity";
+import { LiveBadge, TickingClock } from "@/components/ui/live-indicators";
+import { SignalTicker } from "@/components/ui/signal-ticker";
 
 interface DashboardShellProps {
   children: React.ReactNode;
@@ -119,11 +120,19 @@ export default function DashboardShell({ children, basePath, userSlot, showDemoB
 
         {/* MAIN CONTENT AREA */}
         <main className="flex-1 flex flex-col min-w-0">
-          {/* DEMO BANNER */}
+          {/* DEMO BANNER — hidden for investor demos */}
+
+          {/* OAKWELL PULSE — persistent AI status strip (demo only) */}
           {showDemoBanner && (
-            <div className="h-8 bg-amber-500/10 border-b border-amber-500/20 flex items-center justify-center gap-2 shrink-0">
-              <FlaskConical size={13} className="text-amber-400" />
-              <span className="text-[11px] font-medium text-amber-400 tracking-wide uppercase">Demo Mode — Sample Data</span>
+            <div className="h-7 bg-gradient-to-r from-[#0a0f1e] via-[#0a0a0a] to-[#0a0f1e] border-b border-zinc-800/50 flex items-center justify-between px-4 md:px-6 shrink-0 overflow-hidden">
+              <div className="flex items-center gap-3">
+                <LiveBadge label="OAKWELL PULSE" color="blue" />
+                <span className="text-[10px] text-zinc-400 font-mono hidden sm:inline">6 competitors monitored · 31 proof artifacts · 3 active scans</span>
+              </div>
+              <div className="flex items-center gap-3 text-[10px] font-mono text-zinc-500">
+                <span className="hidden md:inline">Next scan in 4m 12s</span>
+                <TickingClock className="text-zinc-400" />
+              </div>
             </div>
           )}
 
@@ -155,9 +164,12 @@ export default function DashboardShell({ children, basePath, userSlot, showDemoB
           </header>
 
           {/* SCROLLABLE VIEWPORT */}
-          <div className="flex-1 overflow-y-auto bg-[#050505]">
+          <div className="flex-1 overflow-y-auto bg-[#050505] min-h-0">
             {children}
           </div>
+
+          {/* SIGNAL TICKER — Bloomberg-style bottom bar (demo only) */}
+          {showDemoBanner && <SignalTicker />}
         </main>
       </div>
     </DashboardSurfaceContext.Provider>
